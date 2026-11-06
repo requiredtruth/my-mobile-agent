@@ -27,7 +27,13 @@ public class IntegrationTest {
  }
  @Test public void realGgufNativeInference()throws Exception{
   File model=new File(context.getFilesDir(),"smoke.gguf");try(InputStream in=InstrumentationRegistry.getInstrumentation().getContext().getAssets().open("smoke.gguf");OutputStream out=new FileOutputStream(model)){byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);}
-  Models.validate(model);NativeModel.load(model.getAbsolutePath(),2048,2);byte[][] last={null};byte[] result=NativeModel.generate("[{\"role\":\"system\",\"content\":\"Tell stories.\"},{\"role\":\"user\",\"content\":\"Once upon a time, a little cat\"}]","[]",256,0,b->last[0]=b);JSONObject response=new JSONObject(new String(result,StandardCharsets.UTF_8));assertFalse(response.optString("content").isEmpty());assertNotNull(last[0]);assertTrue(response.getInt("output_tokens")>0);NativeModel.unload();model.delete();
+  Models.validate(model);NativeModel.load(model.getAbsolutePath(),2048,2);byte[][] last={null};byte[] result=NativeModel.generate("[{\"role\":\"system\",\"content\":\"Tell stories.\"},{\"role\":\"user\",\"content\":\"Once upon a time, a little cat\"}]","[]",256,0,b->last[0]=b);JSONObject response=new JSONObject(new String(result,StandardCharsets.UTF_8));assertFalse(response.optString("content").isEmpty());assertNotNull(last[0]);assertTrue(response.getInt("output_tokens")>0);
+  JSONArray history=new JSONArray().put(Protocol.message("system","Tell stories."));
+  for(int i=0;i<60;i++){history.put(Protocol.message("user","The little cat walked through the garden with a friend and saw a bright flower. "+i));history.put(Protocol.message("assistant","The friend smiled and the cat sat on the grass beside the tree."));}
+  history.put(Protocol.message("user","Once upon a time, a little cat"));
+  JSONObject trimmed=new JSONObject(new String(NativeModel.generate(history.toString(),"[]",256,0,b->{}),StandardCharsets.UTF_8));assertTrue(trimmed.getInt("trimmed_turns")>0);assertFalse(trimmed.optString("content").isEmpty());
+  JSONObject stopped=new JSONObject(new String(NativeModel.generate("[{\"role\":\"user\",\"content\":\"Once upon a time\"}]","[]",256,0,b->NativeModel.stop()),StandardCharsets.UTF_8));assertEquals("stopped",stopped.getString("finish_reason"));
+  NativeModel.unload();model.delete();
  }
  @Test public void thinkingAndStrictToolBoundaries()throws Exception{
   assertEquals("Fire is combustion.",Protocol.answer("<think>plan</think>Fire is combustion."));

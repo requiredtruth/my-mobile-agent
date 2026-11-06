@@ -55,6 +55,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
  int available=(int)llama_n_ctx(ctx)-(int)tokens.size()-1;
  if(available<256)throw std::runtime_error("Current question, instructions and tool results leave fewer than 256 output tokens. Shorten the question/instructions or increase context in Settings and reload.");
  int limit=std::min(desired,available);
+ const int effectiveThinking=std::min(std::clamp((int)thinkLimit,0,256),std::max(0,limit-288));
  llama_memory_clear(llama_get_memory(ctx),true);
  for(size_t off=0;off<tokens.size()&&!cancelled;off+=256){int size=std::min(size_t(256),tokens.size()-off);if(llama_decode(ctx,llama_batch_get_one(tokens.data()+off,size)))throw std::runtime_error("Prompt evaluation failed; reduce context or model size.");}
  if(cancelled)return bytes(e,"{\"content\":\"\",\"finish_reason\":\"stopped\"}");
@@ -80,7 +81,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
   size_t opened=combined.rfind(start),closed=std::string::npos;
   for(auto& end:ends){auto pos=combined.rfind(end);if(pos!=std::string::npos&&(closed==std::string::npos||pos>closed))closed=pos;}
   bool thinking=opened!=std::string::npos&&(closed==std::string::npos||opened>closed);
-  if(thinking&&++thinkingTokens>=std::max(1,(int)thinkLimit)){
+  if(thinking&&++thinkingTokens>=std::max(1,effectiveThinking)){
    auto closing=tokenize(vocab,ends.front(),false);
    for(auto t:closing){if(used>=limit||cancelled)break;feed(t);}capped=true;
   }
