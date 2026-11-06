@@ -6,14 +6,16 @@
 #include <codecvt>
 #include <locale>
 #include "llama.h"
+#include "chat.h"
 static llama_model * model=nullptr;
 static llama_context * ctx=nullptr;
+static common_chat_templates_ptr templates;
 static std::atomic<bool> cancelled{false};
 static std::string str(JNIEnv* e,jstring s){const jchar* p=e->GetStringChars(s,nullptr);std::u16string v((const char16_t*)p,e->GetStringLength(s));e->ReleaseStringChars(s,p);return std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t>{}.to_bytes(v);}
 static void fail(JNIEnv* e,const std::string& s){e->ThrowNew(e->FindClass("java/lang/IllegalStateException"),s.c_str());}
 static jbyteArray bytes(JNIEnv* e,const std::string& s){auto a=e->NewByteArray(s.size());e->SetByteArrayRegion(a,0,s.size(),(const jbyte*)s.data());return a;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_stop(JNIEnv*,jclass){cancelled=true;}
-extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
+extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){templates.reset();if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_load(JNIEnv* e,jclass c,jstring path,jint context,jint threads){
  Java_com_mobileagent_NativeModel_unload(e,c);llama_backend_init();
  auto mp=llama_model_default_params();mp.n_gpu_layers=0;mp.use_mmap=true;
@@ -21,7 +23,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_load(JNIEnv* 
  if(!model){fail(e,"Cannot load GGUF. Check model architecture, available RAM and whether all split files are present.");return;}
  auto cp=llama_context_default_params();cp.n_ctx=context;cp.n_batch=256;cp.n_ubatch=128;cp.n_threads=threads;cp.n_threads_batch=threads;
  ctx=llama_init_from_model(model,cp);
- if(!ctx){llama_model_free(model);model=nullptr;fail(e,"Not enough memory for this context. Reduce context size or use a smaller quantization.");}
+ if(!ctx){llama_model_free(model);model=nullptr;fail(e,"Not enough memory for this context. Reduce context size or use a smaller quantization.");return;}
+ try{templates=common_chat_templates_init(model,"");}catch(const std::exception& ex){Java_com_mobileagent_NativeModel_unload(e,c);fail(e,std::string("Chat template error: ")+ex.what());}
 }
 extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generate(JNIEnv* e,jclass,jobjectArray roles,jobjectArray texts,jint limit,jobject cb){
  if(!ctx||!model){fail(e,"Select and load a GGUF model in Models first.");return nullptr;}
@@ -29,11 +32,8 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
  std::vector<std::string> rs,ts;
  int count=e->GetArrayLength(roles);rs.reserve(count);ts.reserve(count);
  for(int i=0;i<count;i++){auto r=(jstring)e->GetObjectArrayElement(roles,i);auto t=(jstring)e->GetObjectArrayElement(texts,i);rs.push_back(str(e,r));ts.push_back(str(e,t));e->DeleteLocalRef(r);e->DeleteLocalRef(t);}
- std::vector<llama_chat_message> msgs;for(int i=0;i<count;i++)msgs.push_back({rs[i].c_str(),ts[i].c_str()});
- const char* tmpl=llama_model_chat_template(model,nullptr);if(!tmpl)tmpl="chatml";
- int n=llama_chat_apply_template(tmpl,msgs.data(),msgs.size(),true,nullptr,0);
- if(n<0){fail(e,"This model uses an unsupported chat template. Choose an instruct GGUF with a supported template.");return nullptr;}
- std::vector<char> prompt(n+1);llama_chat_apply_template(tmpl,msgs.data(),msgs.size(),true,prompt.data(),prompt.size());
+ std::string prompt;try{common_chat_templates_inputs input;input.use_jinja=true;input.add_generation_prompt=true;for(int i=0;i<count;i++){common_chat_msg msg;msg.role=rs[i];msg.content=ts[i];input.messages.push_back(msg);}prompt=common_chat_templates_apply(templates.get(),input).prompt.str();}catch(const std::exception& ex){fail(e,std::string("Cannot format this model's chat template: ")+ex.what());return nullptr;}
+ int n=prompt.size();
  auto vocab=llama_model_get_vocab(model);int nt=llama_tokenize(vocab,prompt.data(),n,nullptr,0,true,true);if(nt<0)nt=-nt;
  std::vector<llama_token> tokens(nt);nt=llama_tokenize(vocab,prompt.data(),n,tokens.data(),tokens.size(),true,true);
  if(nt<=0||nt+limit>(int)llama_n_ctx(ctx)){fail(e,"Conversation exceeds the selected model context. Start a new chat or increase context in Settings.");return nullptr;}

@@ -19,6 +19,8 @@ jobs:
           java-version: '17'
       - name: Verify standalone RAG hypercubes
         run: |
+          test ! -d app/src/main/java/com/qmanifold
+          if rg -n "import com[.]qmanifold" app/src; then exit 1; fi
           mkdir -p test-out
           javac -d test-out app/src/main/java/com/mobileagent/Hypercube.java tests/CubeTest.java
           java -cp test-out CubeTest

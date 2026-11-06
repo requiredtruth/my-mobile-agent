@@ -22,7 +22,7 @@ public class IntegrationTest {
   String result=Agent.memory.search("lunar telescope moonlight");assertTrue(result.contains("Astronomy manual"));assertTrue(result.contains("silver mirror"));Agent.memory.close();Agent.memory=new CubeMemory(db);assertTrue(Agent.memory.search("moonlight").contains("silver mirror"));
  }
  @Test public void toolParsingAndInstructionOrder()throws Exception{
-  assertNull(Agent.call("A normal answer."));assertEquals("knowledge.search",Agent.call("```json\n{\"tool\":\"knowledge.search\",\"arguments\":{\"query\":\"lunar\"}}\n```").getString("tool"));
+  assertNull(Agent.call("A normal answer."));assertEquals("knowledge.search",Agent.call("<think>Need evidence.</think>{\"tool\":\"knowledge.search\",\"arguments\":{}}").getString("tool"));assertEquals("knowledge.search",Agent.call("```json\n{\"tool\":\"knowledge.search\",\"arguments\":{\"query\":\"lunar\"}}\n```").getString("tool"));
   db.getWritableDatabase().execSQL("INSERT INTO instructions(title,text,enabled,position) VALUES('later','Later rule',1,10)");db.getWritableDatabase().execSQL("INSERT INTO instructions(title,text,enabled,position) VALUES('off','Disabled secret',0,-1)");assertTrue(db.instructions().indexOf("helpful")<db.instructions().indexOf("Later rule"));assertFalse(db.instructions().contains("Disabled secret"));
  }
  @Test public void realGgufNativeInference()throws Exception{
