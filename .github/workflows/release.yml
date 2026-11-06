@@ -1,0 +1,91 @@
+name: Test, build and publish APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mobile-agent-release
+  cancel-in-progress: true
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify standalone RAG hypercubes
+        run: |
+          mkdir -p test-out
+          javac -d test-out app/src/main/java/com/mobileagent/Hypercube.java tests/CubeTest.java
+          java -cp test-out CubeTest
+      - name: Fetch pinned llama.cpp
+        run: |
+          mkdir -p vendor/llama.cpp
+          curl --fail --location --retry 3 https://codeload.github.com/ggml-org/llama.cpp/tar.gz/d38bea34227bbf9069d62fdc239c98ab6e05435a | tar xz -C vendor/llama.cpp --strip-components=1
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;28.0.13004108 cmake;3.31.6'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - uses: actions/cache@v4
+        with:
+          path: release.keystore
+          key: my-mobile-agent-signing-v1
+      - name: Prepare stable signing key
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f release.keystore ]; then
+            count=$(gh api repos/${{ github.repository }}/releases --jq length)
+            if [ "$count" != "0" ]; then
+              echo 'Restore original signing cache before publishing an update.'
+              exit 1
+            fi
+            keytool -genkeypair -keystore release.keystore -storepass mobile-agent-release -keypass mobile-agent-release -alias mobile-agent -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=My Mobile Agent'
+          fi
+      - name: Prepare tiny public GGUF for native smoke test
+        run: |
+          mkdir -p app/src/androidTest/assets
+          curl --fail --location --retry 3 https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf -o app/src/androidTest/assets/smoke.gguf
+      - name: Build and lint
+        run: gradle --no-daemon :app:assembleRelease :app:lintRelease
+      - name: Enable KVM for Android integration tests
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run Android integration and native GGUF smoke tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: gradle --no-daemon :app:connectedDebugAndroidTest
+      - name: Verify APK signature and 16 KiB alignment
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/release/app-release.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apk-and-reports
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/reports/
+            app/build/outputs/androidTest-results/
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=v1.0.0-build.${{ github.run_number }}
+          cp app/build/outputs/apk/release/app-release.apk my-mobile-agent.apk
+          git archive --format=zip HEAD -o source.zip
+          sha256sum my-mobile-agent.apk source.zip > SHA256SUMS
+          gh release create "$tag" --target "$GITHUB_SHA" --title "My Mobile Agent 1.0.0 (build ${{ github.run_number }})" --notes-file RELEASE_NOTES.md my-mobile-agent.apk source.zip spec.md SHA256SUMS
