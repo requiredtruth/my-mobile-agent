@@ -25,6 +25,9 @@ int main(int argc,char** argv){
   check(tools.msg().tool_calls.size()==1,"Spark native tool request not recognized");auto call=tools.msg().tool_calls.front();check(call.name=="knowledge.search","wrong tool name");check(common_json::parse(call.arguments)["query"]=="fire","wrong native argument");
   auto assistant=tools.msg();assistant.tool_calls[0].id="call1";in.messages.push_back(assistant);common_chat_msg result;result.role="tool";result.tool_name="knowledge.search";result.tool_call_id="call1";result.content="[Untrusted tool result] Fire is combustion.";in.messages.push_back(result);
   common_chat_session after(templates.get(),nullptr,in);check(after.prompt().str().find("<tool_response>")!=std::string::npos,"native tool result format missing");
-  std::cout<<"Spark no-think, implicit reasoning, native tool parsing and result round-trip passed\n";
+  in.tool_choice=COMMON_CHAT_TOOL_CHOICE_AUTO;common_chat_session unicode(templates.get(),nullptr,in);
+  unicode.feed(common_chat_input("\xf0\x9f"));auto partial=unicode.msg().to_json_oaicompat().dump_safe();check(common_json::parse(partial).is_object(),"partial UTF-8 snapshot is invalid JSON");
+  unicode.finish(common_chat_input("\x94\xa5"));check(unicode.msg().content=="\xf0\x9f\x94\xa5","split emoji was not preserved");
+  std::cout<<"Spark no-think, implicit reasoning, native tools, result round-trip and split UTF-8 passed\n";
  }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}
 }

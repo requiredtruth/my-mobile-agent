@@ -70,7 +70,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
  if(!sampler)throw std::runtime_error("Cannot initialize model sampler");
  auto cls=e->GetObjectClass(cb);auto method=e->GetMethodID(cls,"token","([B)V");e->DeleteLocalRef(cls);
  std::string raw,finish="length";int used=0,thinkingTokens=0;bool capped=false;
- auto snapshot=[&](){auto j=session->msg().to_json_oaicompat();j["finish_reason"]=finish;j["output_tokens"]=used;j["output_budget"]=limit;j["trimmed_turns"]=trimmed;j["thinking_capped"]=capped;return j.dump();};
+ auto snapshot=[&](){auto j=session->msg().to_json_oaicompat();j["finish_reason"]=finish;j["output_tokens"]=used;j["output_budget"]=limit;j["trimmed_turns"]=trimmed;j["thinking_capped"]=capped;return j.dump_safe();};
  auto feed=[&](llama_token token){
   common_sampler_accept(sampler.get(),token,true);
   std::vector<char> piece(256);int n=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);if(n<0){piece.resize(-n);n=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);}
