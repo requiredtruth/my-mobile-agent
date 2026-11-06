@@ -24,8 +24,8 @@ public final class MainActivity extends Activity implements Agent.Listener {
  public void onSaveInstanceState(Bundle state){state.putString("chat",chat);super.onSaveInstanceState(state);}
  public void onDestroy(){if(tts!=null){tts.stop();tts.shutdown();}io.shutdown();super.onDestroy();}
  int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
- LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(1);return v;}
- LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setOrientation(0);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
+ LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);return v;}
+ LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.HORIZONTAL);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
  TextView text(String s,int size,int color){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);t.setPadding(dp(5),dp(6),dp(5),dp(6));return t;}
  void label(LinearLayout box,String s){box.addView(text(s,14,MUTED));}
  void title(LinearLayout box,String s){TextView t=text(s,23,TEXT);t.setTypeface(null,Typeface.BOLD);box.addView(t);}
