@@ -5,8 +5,11 @@
 #include <stdexcept>
 #include <codecvt>
 #include <locale>
+#include <memory>
+#include <algorithm>
 #include "llama.h"
 #include "chat.h"
+#include "sampling.h"
 static llama_model * model=nullptr;
 static llama_context * ctx=nullptr;
 static common_chat_templates_ptr templates;
@@ -14,6 +17,7 @@ static std::atomic<bool> cancelled{false};
 static std::string str(JNIEnv* e,jstring s){const jchar* p=e->GetStringChars(s,nullptr);std::u16string v((const char16_t*)p,e->GetStringLength(s));e->ReleaseStringChars(s,p);return std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t>{}.to_bytes(v);}
 static void fail(JNIEnv* e,const std::string& s){e->ThrowNew(e->FindClass("java/lang/IllegalStateException"),s.c_str());}
 static jbyteArray bytes(JNIEnv* e,const std::string& s){auto a=e->NewByteArray(s.size());e->SetByteArrayRegion(a,0,s.size(),(const jbyte*)s.data());return a;}
+static std::vector<llama_token> tokenize(const llama_vocab* vocab,const std::string& text,bool special){int n=llama_tokenize(vocab,text.data(),text.size(),nullptr,0,special,true);if(n<0)n=-n;std::vector<llama_token> out(n);n=llama_tokenize(vocab,text.data(),text.size(),out.data(),out.size(),special,true);if(n<0)throw std::runtime_error("Tokenization failed");out.resize(n);return out;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_stop(JNIEnv*,jclass){cancelled=true;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){templates.reset();if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_load(JNIEnv* e,jclass c,jstring path,jint context,jint threads){
@@ -26,27 +30,67 @@ extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_load(JNIEnv* 
  if(!ctx){llama_model_free(model);model=nullptr;fail(e,"Not enough memory for this context. Reduce context size or use a smaller quantization.");return;}
  try{templates=common_chat_templates_init(model,"");}catch(const std::exception& ex){Java_com_mobileagent_NativeModel_unload(e,c);fail(e,std::string("Chat template error: ")+ex.what());}
 }
-extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generate(JNIEnv* e,jclass,jobjectArray roles,jobjectArray texts,jint limit,jobject cb){
+// JSON snapshots contain separate content, reasoning_content and native tool_calls.
+extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generate(JNIEnv* e,jclass,jstring messages,jstring tools,jint answerLimit,jint thinkLimit,jobject cb){
  if(!ctx||!model){fail(e,"Select and load a GGUF model in Models first.");return nullptr;}
  cancelled=false;
- std::vector<std::string> rs,ts;
- int count=e->GetArrayLength(roles);rs.reserve(count);ts.reserve(count);
- for(int i=0;i<count;i++){auto r=(jstring)e->GetObjectArrayElement(roles,i);auto t=(jstring)e->GetObjectArrayElement(texts,i);rs.push_back(str(e,r));ts.push_back(str(e,t));e->DeleteLocalRef(r);e->DeleteLocalRef(t);}
- std::string prompt;try{common_chat_templates_inputs input;input.use_jinja=true;input.add_generation_prompt=true;for(int i=0;i<count;i++){common_chat_msg msg;msg.role=rs[i];msg.content=ts[i];input.messages.push_back(msg);}prompt=common_chat_templates_apply(templates.get(),input).prompt.str();}catch(const std::exception& ex){fail(e,std::string("Cannot format this model's chat template: ")+ex.what());return nullptr;}
- int n=prompt.size();
- auto vocab=llama_model_get_vocab(model);int nt=llama_tokenize(vocab,prompt.data(),n,nullptr,0,true,true);if(nt<0)nt=-nt;
- std::vector<llama_token> tokens(nt);nt=llama_tokenize(vocab,prompt.data(),n,tokens.data(),tokens.size(),true,true);
- if(nt<=0||nt+limit>(int)llama_n_ctx(ctx)){fail(e,"Conversation exceeds the selected model context. Start a new chat or increase context in Settings.");return nullptr;}
- llama_memory_clear(llama_get_memory(ctx),true);
- for(int off=0;off<nt&&!cancelled;off+=256){int size=std::min(256,nt-off);if(llama_decode(ctx,llama_batch_get_one(tokens.data()+off,size))){fail(e,"Prompt evaluation failed; reduce the context or model size.");return nullptr;}}
- auto sampler=llama_sampler_chain_init(llama_sampler_chain_default_params());
- llama_sampler_chain_add(sampler,llama_sampler_init_top_k(40));llama_sampler_chain_add(sampler,llama_sampler_init_top_p(.9f,1));llama_sampler_chain_add(sampler,llama_sampler_init_temp(.65f));llama_sampler_chain_add(sampler,llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
- auto method=e->GetMethodID(e->GetObjectClass(cb),"token","([B)V");std::string output;
- for(int i=0;i<limit&&!cancelled;i++){
-  auto token=llama_sampler_sample(sampler,ctx,-1);if(llama_vocab_is_eog(vocab,token))break;
-  std::vector<char> piece(256);int len=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);if(len<0){piece.resize(-len);len=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);}
-  if(len>0){std::string p(piece.data(),len);output+=p;auto a=bytes(e,p);e->CallVoidMethod(cb,method,a);e->DeleteLocalRef(a);if(e->ExceptionCheck())break;}
-  if(llama_decode(ctx,llama_batch_get_one(&token,1))){fail(e,"Token evaluation failed.");break;}
+ try{
+ auto vocab=llama_model_get_vocab(model);
+ common_chat_templates_inputs input;input.use_jinja=true;input.add_generation_prompt=true;
+ input.enable_thinking=thinkLimit>0;input.reasoning_format=COMMON_REASONING_FORMAT_DEEPSEEK;
+ input.chat_template_kwargs["enable_thinking"]=thinkLimit>0?"true":"false";
+ input.messages=common_chat_msgs_parse_oaicompat(common_json::parse(str(e,messages)));
+ input.tools=common_chat_tools_parse_oaicompat(common_json::parse(str(e,tools)));
+ const int desired=std::clamp((int)answerLimit,256,4096)+std::clamp((int)thinkLimit,0,256)+32;
+ std::unique_ptr<common_chat_session> session;std::vector<llama_token> tokens;int trimmed=0;
+ // Trim complete old turns using the actual rendered/tokenized prompt, retaining system and latest user/tool chain.
+ while(true){
+  session=std::make_unique<common_chat_session>(templates.get(),vocab,input);
+  tokens=tokenize(vocab,session->prompt().str(),true);
+  if((int)tokens.size()+desired<=(int)llama_n_ctx(ctx))break;
+  size_t next=2;while(next<input.messages.size()&&input.messages[next].role!="user")++next;
+  if(next>=input.messages.size())break;
+  input.messages.erase(input.messages.begin()+1,input.messages.begin()+next);++trimmed;
  }
- llama_sampler_free(sampler);return bytes(e,output);
+ int available=(int)llama_n_ctx(ctx)-(int)tokens.size()-1;
+ if(available<256)throw std::runtime_error("Current question, instructions and tool results leave fewer than 256 output tokens. Shorten the question/instructions or increase context in Settings and reload.");
+ int limit=std::min(desired,available);
+ llama_memory_clear(llama_get_memory(ctx),true);
+ for(size_t off=0;off<tokens.size()&&!cancelled;off+=256){int size=std::min(size_t(256),tokens.size()-off);if(llama_decode(ctx,llama_batch_get_one(tokens.data()+off,size)))throw std::runtime_error("Prompt evaluation failed; reduce context or model size.");}
+ if(cancelled)return bytes(e,"{\"content\":\"\",\"finish_reason\":\"stopped\"}");
+ common_params_sampling sp;sp.temp=.6f;sp.top_k=40;sp.top_p=.9f;session->apply_sampling(sp);
+ std::unique_ptr<common_sampler,decltype(&common_sampler_free)> sampler(common_sampler_init(model,sp),common_sampler_free);
+ if(!sampler)throw std::runtime_error("Cannot initialize model sampler");
+ auto cls=e->GetObjectClass(cb);auto method=e->GetMethodID(cls,"token","([B)V");e->DeleteLocalRef(cls);
+ std::string raw,finish="length";int used=0,thinkingTokens=0;bool capped=false;
+ auto snapshot=[&](){auto j=session->msg().to_json_oaicompat();j["finish_reason"]=finish;j["output_tokens"]=used;j["output_budget"]=limit;j["trimmed_turns"]=trimmed;j["thinking_capped"]=capped;return j.dump();};
+ auto feed=[&](llama_token token){
+  common_sampler_accept(sampler.get(),token,true);
+  std::vector<char> piece(256);int n=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);if(n<0){piece.resize(-n);n=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);}
+  if(n>0){std::string p(piece.data(),n);raw+=p;common_chat_input chunk;chunk.append(p,token);session->feed(chunk);}
+  if(llama_decode(ctx,llama_batch_get_one(&token,1)))throw std::runtime_error("Token evaluation failed");++used;
+ };
+ while(used<limit&&!cancelled){
+  auto token=common_sampler_sample(sampler.get(),ctx,-1);
+  if(llama_vocab_is_eog(vocab,token)){finish="stop";break;}
+  feed(token);
+  std::string combined=session->generation_prompt()+raw;
+  auto start=session->thinking_start_tag();if(start.empty())start="<think>";
+  auto ends=session->thinking_end_tags();if(ends.empty())ends.push_back("</think>");
+  size_t opened=combined.rfind(start),closed=std::string::npos;
+  for(auto& end:ends){auto pos=combined.rfind(end);if(pos!=std::string::npos&&(closed==std::string::npos||pos>closed))closed=pos;}
+  bool thinking=opened!=std::string::npos&&(closed==std::string::npos||opened>closed);
+  if(thinking&&++thinkingTokens>=std::max(1,(int)thinkLimit)){
+   auto closing=tokenize(vocab,ends.front(),false);
+   for(auto t:closing){if(used>=limit||cancelled)break;feed(t);}capped=true;
+  }
+  bool stop=false;for(auto& end:session->additional_stops())if(!end.empty()&&raw.size()>=end.size()&&raw.compare(raw.size()-end.size(),end.size(),end)==0)stop=true;
+  if(stop){finish="stop";break;}
+  auto a=bytes(e,snapshot());e->CallVoidMethod(cb,method,a);e->DeleteLocalRef(a);if(e->ExceptionCheck())return nullptr;
+ }
+ if(cancelled)finish="stopped";
+ // Partial parsing is intentional on cancellation/length: never turn incomplete tool syntax into execution.
+ if(finish=="stop")session->finish();
+ return bytes(e,snapshot());
+ }catch(const std::exception& ex){fail(e,std::string("Generation error: ")+ex.what());return nullptr;}
 }

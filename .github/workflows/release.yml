@@ -1,12 +1,12 @@
 name: Test, build and publish APK
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/**"]
   workflow_dispatch:
 permissions:
   contents: write
 concurrency:
-  group: mobile-agent-release
+  group: mobile-agent-release-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   release:
@@ -28,6 +28,11 @@ jobs:
         run: |
           mkdir -p vendor/llama.cpp
           curl --fail --location --retry 3 https://codeload.github.com/ggml-org/llama.cpp/tar.gz/d38bea34227bbf9069d62fdc239c98ab6e05435a | tar xz -C vendor/llama.cpp --strip-components=1
+      - name: Verify Spark formatting and native bridge API
+        run: |
+          cmake -S tests -B native-test -DCMAKE_BUILD_TYPE=Release
+          cmake --build native-test --target chat-format-test bridge-check -j 4
+          native-test/chat-format-test tests/fixtures/spark-x2.5.jinja
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;28.0.13004108 cmake;3.31.6'
@@ -83,6 +88,7 @@ jobs:
             app/build/reports/
             app/build/outputs/androidTest-results/
       - name: Publish release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
