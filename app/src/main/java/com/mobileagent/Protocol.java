@@ -18,6 +18,10 @@ public final class Protocol {
    if(v.has("tool")&&v.opt("arguments") instanceof JSONObject)return v;
   }catch(JSONException ignored){}return null;
  }
+ public static boolean promisesTool(String text){
+  String s=text.toLowerCase(java.util.Locale.ROOT);
+  return s.matches("(?s).*(?:i'll|i will|let me|i have|i've|i did|i used|i searched|i found).*(?:search|searched|searching|conversations\\.search|knowledge\\.search).*")||s.matches("(?s).*(?:conversations\\.search|knowledge\\.search|conversations\\.summary).*(?:tool|result|found|search).*" );
+ }
  public static JSONObject message(String role,String content)throws JSONException{return new JSONObject().put("role",role).put("content",content);}
  public static JSONArray tools()throws JSONException{
   JSONArray all=new JSONArray();

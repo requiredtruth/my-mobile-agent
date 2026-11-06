@@ -10,6 +10,8 @@
 #include "llama.h"
 #include "chat.h"
 #include "sampling.h"
+#include "log.h"
+#include <cstdio>
 static llama_model * model=nullptr;
 static llama_context * ctx=nullptr;
 static common_chat_templates_ptr templates;
@@ -21,7 +23,10 @@ static std::vector<llama_token> tokenize(const llama_vocab* vocab,const std::str
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_stop(JNIEnv*,jclass){cancelled=true;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){templates.reset();if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_load(JNIEnv* e,jclass c,jstring path,jint context,jint threads){
- Java_com_mobileagent_NativeModel_unload(e,c);llama_backend_init();
+ Java_com_mobileagent_NativeModel_unload(e,c);
+ common_log_set_verbosity_thold(LOG_LEVEL_WARN);
+ auto logger=[](ggml_log_level level,const char* text,void*){if(level==GGML_LOG_LEVEL_WARN||level==GGML_LOG_LEVEL_ERROR)std::fputs(text,stderr);};
+ llama_log_set(logger,nullptr);ggml_log_set(logger,nullptr);llama_backend_init();
  auto mp=llama_model_default_params();mp.n_gpu_layers=0;mp.load_mode=LLAMA_LOAD_MODE_MMAP;
  model=llama_model_load_from_file(str(e,path).c_str(),mp);
  if(!model){fail(e,"Cannot load GGUF. Check model architecture, available RAM and whether all split files are present.");return;}
@@ -31,7 +36,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_load(JNIEnv* 
  try{templates=common_chat_templates_init(model,"");}catch(const std::exception& ex){Java_com_mobileagent_NativeModel_unload(e,c);fail(e,std::string("Chat template error: ")+ex.what());}
 }
 // JSON snapshots contain separate content, reasoning_content and native tool_calls.
-extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generate(JNIEnv* e,jclass,jstring messages,jstring tools,jint answerLimit,jint thinkLimit,jobject cb){
+extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generate(JNIEnv* e,jclass,jstring messages,jstring tools,jint answerLimit,jint thinkLimit,jboolean requireTool,jobject cb){
  if(!ctx||!model){fail(e,"Select and load a GGUF model in Models first.");return nullptr;}
  cancelled=false;
  try{
@@ -41,6 +46,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
  input.chat_template_kwargs["enable_thinking"]=thinkLimit>0?"true":"false";
  input.messages=common_chat_msgs_parse_oaicompat(common_json::parse(str(e,messages)));
  input.tools=common_chat_tools_parse_oaicompat(common_json::parse(str(e,tools)));
+ if(requireTool&&!input.tools.empty())input.tool_choice=COMMON_CHAT_TOOL_CHOICE_REQUIRED;
  const int desired=std::clamp((int)answerLimit,256,4096)+std::clamp((int)thinkLimit,0,256)+32;
  std::unique_ptr<common_chat_session> session;std::vector<llama_token> tokens;int trimmed=0;
  // Trim complete old turns using the actual rendered/tokenized prompt, retaining system and latest user/tool chain.

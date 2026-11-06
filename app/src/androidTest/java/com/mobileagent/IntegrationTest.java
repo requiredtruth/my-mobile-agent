@@ -27,12 +27,12 @@ public class IntegrationTest {
  }
  @Test public void realGgufNativeInference()throws Exception{
   File model=new File(context.getFilesDir(),"smoke.gguf");try(InputStream in=InstrumentationRegistry.getInstrumentation().getContext().getAssets().open("smoke.gguf");OutputStream out=new FileOutputStream(model)){byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);}
-  Models.validate(model);NativeModel.load(model.getAbsolutePath(),2048,2);byte[][] last={null};byte[] result=NativeModel.generate("[{\"role\":\"system\",\"content\":\"Tell stories.\"},{\"role\":\"user\",\"content\":\"Once upon a time, a little cat\"}]","[]",256,0,b->last[0]=b);JSONObject response=new JSONObject(new String(result,StandardCharsets.UTF_8));assertFalse(response.optString("content").isEmpty());assertNotNull(last[0]);assertTrue(response.getInt("output_tokens")>0);
+  Models.validate(model);NativeModel.load(model.getAbsolutePath(),2048,2);byte[][] last={null};byte[] result=NativeModel.generate("[{\"role\":\"system\",\"content\":\"Tell stories.\"},{\"role\":\"user\",\"content\":\"Once upon a time, a little cat\"}]","[]",256,0,false,b->last[0]=b);JSONObject response=new JSONObject(new String(result,StandardCharsets.UTF_8));assertFalse(response.optString("content").isEmpty());assertNotNull(last[0]);assertTrue(response.getInt("output_tokens")>0);
   JSONArray history=new JSONArray().put(Protocol.message("system","Tell stories."));
   for(int i=0;i<60;i++){history.put(Protocol.message("user","The little cat walked through the garden with a friend and saw a bright flower. "+i));history.put(Protocol.message("assistant","The friend smiled and the cat sat on the grass beside the tree."));}
   history.put(Protocol.message("user","Once upon a time, a little cat"));
-  JSONObject trimmed=new JSONObject(new String(NativeModel.generate(history.toString(),"[]",256,0,b->{}),StandardCharsets.UTF_8));assertTrue(trimmed.getInt("trimmed_turns")>0);assertFalse(trimmed.optString("content").isEmpty());
-  JSONObject stopped=new JSONObject(new String(NativeModel.generate("[{\"role\":\"user\",\"content\":\"Once upon a time\"}]","[]",256,0,b->NativeModel.stop()),StandardCharsets.UTF_8));assertEquals("stopped",stopped.getString("finish_reason"));
+  JSONObject trimmed=new JSONObject(new String(NativeModel.generate(history.toString(),"[]",256,0,false,b->{}),StandardCharsets.UTF_8));assertTrue(trimmed.getInt("trimmed_turns")>0);assertFalse(trimmed.optString("content").isEmpty());
+  JSONObject stopped=new JSONObject(new String(NativeModel.generate("[{\"role\":\"user\",\"content\":\"Once upon a time\"}]","[]",256,0,false,b->NativeModel.stop()),StandardCharsets.UTF_8));assertEquals("stopped",stopped.getString("finish_reason"));
   NativeModel.unload();model.delete();
  }
  @Test public void thinkingAndStrictToolBoundaries()throws Exception{
@@ -47,7 +47,7 @@ public class IntegrationTest {
  }
  @Test public void nativeToolRoundTripThenFinalAnswer()throws Exception{
   String chat=db.newChat();db.message(chat,"user","Find lighthouse in past notes");Agent.loaded="test";int[] runs={0};
-  Agent.generator=(messages,tools,answer,thinking,callback)->{try{
+  Agent.generator=(messages,tools,answer,thinking,required,callback)->{try{
    assertEquals(1536,answer);JSONArray input=new JSONArray(messages);JSONObject output;
    if(runs[0]++==0){assertEquals(3,new JSONArray(tools).length());output=new JSONObject("{\"content\":\"\",\"finish_reason\":\"stop\",\"reasoning_content\":\"Need past notes\",\"tool_calls\":[{\"id\":\"call1\",\"type\":\"function\",\"function\":{\"name\":\"conversations.search\",\"arguments\":\"{\\\"query\\\":\\\"lighthouse\\\"}\"}}]}");}
    else{JSONObject result=input.getJSONObject(input.length()-1);assertEquals("tool",result.getString("role"));assertEquals("call1",result.getString("tool_call_id"));assertTrue(result.getString("content").contains("Untrusted"));output=new JSONObject().put("content","No past notes matched.").put("finish_reason","stop");}
@@ -57,8 +57,17 @@ public class IntegrationTest {
  }
  @Test public void truncatedToolIsNeverExecuted()throws Exception{
   String chat=db.newChat();db.message(chat,"user","What is fire?");Agent.loaded="test";int[] runs={0};
-  Agent.generator=(messages,tools,answer,thinking,callback)->{String result=runs[0]++==0?"{\"content\":\"{\\\"tool\\\":\\\"knowledge.search\\\",\\\"arguments\\\":{\\\"query\\\":\\\"fire\\\"}}\",\"finish_reason\":\"length\"}":"{\"content\":\"Fire is combustion.\",\"finish_reason\":\"stop\"}";return result.getBytes(StandardCharsets.UTF_8);};
+  Agent.generator=(messages,tools,answer,thinking,required,callback)->{String result=runs[0]++==0?"{\"content\":\"{\\\"tool\\\":\\\"knowledge.search\\\",\\\"arguments\\\":{\\\"query\\\":\\\"fire\\\"}}\",\"finish_reason\":\"length\"}":"{\"content\":\"Fire is combustion.\",\"finish_reason\":\"stop\"}";return result.getBytes(StandardCharsets.UTF_8);};
   Agent.run(chat,"What is fire?");assertEquals(2,runs[0]);assertFalse(db.messages(chat).stream().anyMatch(m->m[1].equals("tool")));assertEquals("Fire is combustion.",db.messages(chat).get(db.messages(chat).size()-1)[2]);
+ }
+
+ @Test public void promisedSearchRequiresRealToolRetry()throws Exception{
+  String chat=db.newChat();db.message(chat,"user","Search past conversations for lighthouse");Agent.loaded="test";int[] runs={0};
+  Agent.generator=(messages,tools,answer,thinking,required,callback)->{try{
+   if(runs[0]++==0){assertFalse(required);return new JSONObject().put("content","I'll search your past conversations now.").put("finish_reason","stop").toString().getBytes(StandardCharsets.UTF_8);}
+   assertTrue(required);return new JSONObject().put("content","Cannot complete the search.").put("finish_reason","stop").toString().getBytes(StandardCharsets.UTF_8);
+  }catch(JSONException e){throw new AssertionError(e);}};
+  Agent.run(chat,"Search past conversations for lighthouse");assertEquals(2,runs[0]);assertFalse(db.messages(chat).stream().anyMatch(m->m[2].contains("I'll search")));
  }
 
 }

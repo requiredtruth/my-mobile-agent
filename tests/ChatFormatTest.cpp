@@ -19,7 +19,8 @@ int main(int argc,char** argv){
   thinking.finish(common_chat_input("Brief reasoning.</think>Fire is combustion."));
   check(thinking.msg().reasoning_content=="Brief reasoning.","implicit opening think tag not parsed");check(thinking.msg().content=="Fire is combustion.","reasoning leaked into answer");
   in.enable_thinking=false;in.chat_template_kwargs["enable_thinking"]="false";
-  common_chat_session tools(templates.get(),nullptr,in);
+  in.tool_choice=COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+  common_chat_session tools(templates.get(),nullptr,in);common_params_sampling sampling;tools.apply_sampling(sampling);check(!sampling.grammar_lazy&&!sampling.grammar.grammar.empty(),"required native tool grammar missing");
   tools.finish(common_chat_input("<tool_call>knowledge.search<arg_key>query</arg_key><arg_value>fire</arg_value></tool_call>"));
   check(tools.msg().tool_calls.size()==1,"Spark native tool request not recognized");auto call=tools.msg().tool_calls.front();check(call.name=="knowledge.search","wrong tool name");check(common_json::parse(call.arguments)["query"]=="fire","wrong native argument");
   auto assistant=tools.msg();assistant.tool_calls[0].id="call1";in.messages.push_back(assistant);common_chat_msg result;result.role="tool";result.tool_name="knowledge.search";result.tool_call_id="call1";result.content="[Untrusted tool result] Fire is combustion.";in.messages.push_back(result);

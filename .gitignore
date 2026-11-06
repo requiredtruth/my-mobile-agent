@@ -4,3 +4,7 @@
 local.properties
 vendor/
 *.jks
+
+test-out/
+native-test/
+*.keystore
