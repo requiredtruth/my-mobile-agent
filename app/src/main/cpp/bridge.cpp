@@ -9,6 +9,7 @@
 #include <memory>
 #include <algorithm>
 #include "llama.h"
+#include "common.h"
 #include "chat.h"
 #include "sampling.h"
 #include "log.h"
@@ -23,18 +24,62 @@ static jbyteArray bytes(JNIEnv* e,const std::string& s){auto a=e->NewByteArray(s
 static std::vector<llama_token> tokenize(const llama_vocab* vocab,const std::string& text,bool special){int n=llama_tokenize(vocab,text.data(),text.size(),nullptr,0,special,true);if(n<0)n=-n;std::vector<llama_token> out(n);n=llama_tokenize(vocab,text.data(),text.size(),out.data(),out.size(),special,true);if(n<0)throw std::runtime_error("Tokenization failed");out.resize(n);return out;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_stop(JNIEnv*,jclass){cancelled=true;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){templates.reset();if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
-extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_load(JNIEnv* e,jclass c,jstring path,jint context,jint threads){
+extern "C" JNIEXPORT jstring JNICALL Java_com_mobileagent_NativeModel_loadBackend(
+ JNIEnv* e,jclass c,jstring path,jint context,jint threads,jboolean preferGpu){
  Java_com_mobileagent_NativeModel_unload(e,c);
  common_log_set_verbosity_thold(LOG_LEVEL_WARN);
- auto logger=[](ggml_log_level level,const char* text,void*){if(level==GGML_LOG_LEVEL_WARN||level==GGML_LOG_LEVEL_ERROR)std::fputs(text,stderr);};
+ auto logger=[](ggml_log_level level,const char* text,void*){
+  if(level==GGML_LOG_LEVEL_WARN||level==GGML_LOG_LEVEL_ERROR)std::fputs(text,stderr);
+ };
  llama_log_set(logger,nullptr);ggml_log_set(logger,nullptr);llama_backend_init();
- auto mp=llama_model_default_params();mp.n_gpu_layers=0;mp.load_mode=LLAMA_LOAD_MODE_MMAP;
- model=llama_model_load_from_file(str(e,path).c_str(),mp);
- if(!model){fail(e,"Cannot load GGUF. Check model architecture, available RAM and whether all split files are present.");return;}
- auto cp=llama_context_default_params();cp.n_ctx=context;cp.n_batch=256;cp.n_ubatch=128;cp.n_threads=threads;cp.n_threads_batch=threads;
- ctx=llama_init_from_model(model,cp);
- if(!ctx){llama_model_free(model);model=nullptr;fail(e,"Not enough memory for this context. Reduce context size or use a smaller quantization.");return;}
- try{templates=common_chat_templates_init(model,"");}catch(const std::exception& ex){Java_com_mobileagent_NativeModel_unload(e,c);fail(e,std::string("Chat template error: ")+ex.what());}
+ const std::string file=str(e,path);
+ auto modelParams=llama_model_default_params();modelParams.load_mode=LLAMA_LOAD_MODE_MMAP;
+ auto contextParams=llama_context_default_params();
+ contextParams.n_ctx=context;contextParams.n_batch=256;contextParams.n_ubatch=128;
+ contextParams.n_threads=std::max(1,(int)threads);
+ contextParams.n_threads_batch=contextParams.n_threads;
+ bool usingGpu=false;
+ auto load=[&](const llama_model_params& mp,const llama_context_params& cp){
+  model=llama_model_load_from_file(file.c_str(),mp);
+  if(model)ctx=llama_init_from_model(model,cp);
+  if(ctx)return true;
+  Java_com_mobileagent_NativeModel_unload(e,c);
+  return false;
+ };
+ if(preferGpu&&llama_supports_gpu_offload()){
+  try{
+   common_params fit;
+   fit.model.path=file;
+   fit.fit_params_min_ctx=context;
+   fit.tensor_buft_overrides.resize(llama_max_tensor_buft_overrides());
+   auto gpuModel=modelParams;
+   auto gpuContext=contextParams;
+   common_fit_apply(fit,gpuModel,gpuContext);
+   // Keep the user's context size even if the fitter suggests shrinking it.
+   gpuContext.n_ctx=context;
+   if(gpuModel.n_gpu_layers!=0)usingGpu=load(gpuModel,gpuContext);
+  }catch(const std::exception& ex){
+   std::fprintf(stderr,"Vulkan load failed, falling back to CPU: %s\n",ex.what());
+   Java_com_mobileagent_NativeModel_unload(e,c);
+  }
+ }
+ if(!usingGpu){
+  ggml_backend_dev_t noGpu[]={nullptr};
+  modelParams.devices=noGpu;
+  modelParams.n_gpu_layers=0;
+  if(!load(modelParams,contextParams)){
+   fail(e,"Cannot load GGUF. Check the model architecture, available RAM and context size.");
+   return nullptr;
+  }
+ }
+ try{
+  templates=common_chat_templates_init(model,"");
+ }catch(const std::exception& ex){
+  Java_com_mobileagent_NativeModel_unload(e,c);
+  fail(e,std::string("Chat template error: ")+ex.what());
+  return nullptr;
+ }
+ return e->NewStringUTF(usingGpu?"Vulkan + CPU":"CPU");
 }
 // JSON snapshots contain separate content, reasoning_content and native tool_calls.
 extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generate(JNIEnv* e,jclass,jstring messages,jstring tools,jint answerLimit,jint thinkLimit,jboolean requireTool,jobject cb){

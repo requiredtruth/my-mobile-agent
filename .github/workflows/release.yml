@@ -71,6 +71,15 @@ jobs:
         run: |
           mkdir -p app/src/androidTest/assets
           curl --fail --location --retry 3 https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf -o app/src/androidTest/assets/smoke.gguf
+      - name: Prepare Android Vulkan shader toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslc
+          mkdir -p vendor/vulkan-headers vendor/spirv-headers
+          curl --fail --location --retry 3 https://codeload.github.com/KhronosGroup/Vulkan-Headers/tar.gz/354fab82dbd91d2526a41ee4dbfff1012a623798 | tar xz -C vendor/vulkan-headers --strip-components=1
+          curl --fail --location --retry 3 https://codeload.github.com/KhronosGroup/SPIRV-Headers/tar.gz/ad9184e76a66b1001c29db9b0a3e87f646c64de0 | tar xz -C vendor/spirv-headers --strip-components=1
+          cmake -S vendor/spirv-headers -B vendor/spirv-build -DCMAKE_INSTALL_PREFIX="$PWD/vendor/spirv-install"
+          cmake --install vendor/spirv-build
       - name: Build and lint
         run: gradle --no-daemon :app:assembleRelease :app:lintRelease
       - name: Enable KVM for Android integration tests

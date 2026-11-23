@@ -9,7 +9,7 @@ public final class Agent {
  interface Generator {byte[] generate(String messages,String tools,int answer,int thinking,boolean requireTool,NativeModel.Tokens callback);}
  static Generator generator=NativeModel::generate;
  public static volatile Listener listener;
- public static volatile String activeChat="",live="",status="Ready",loaded="";
+ public static volatile String activeChat="",live="",status="Ready",loaded="",backend="";
  public static volatile boolean busy=false,stopped=false;
  public static volatile long generationRound;
  public static volatile int percent=-1;
