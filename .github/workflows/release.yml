@@ -39,22 +39,34 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: signing-cache
         with:
           path: release.keystore
-          key: my-mobile-agent-signing-v1
+          key: my-mobile-agent-signing-v2
       - name: Prepare stable signing key
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNING_KEY_BASE64: ${{ secrets.MOBILE_AGENT_SIGNING_KEY_BASE64 }}
         run: |
+          umask 077
           if [ ! -f release.keystore ]; then
-            count=$(gh api repos/${{ github.repository }}/releases --jq length)
-            if [ "$count" != "0" ]; then
-              echo 'Restore original signing cache before publishing an update.'
+            if [ -n "$SIGNING_KEY_BASE64" ]; then
+              printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > release.keystore
+            elif [ "$GITHUB_REF" = refs/heads/main ] &&
+                 [ "$(gh release view --json tagName --jq .tagName)" = v1.0.0-build.11 ]; then
+              keytool -genkeypair -keystore release.keystore -storepass mobile-agent-release -keypass mobile-agent-release -alias mobile-agent -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=My Mobile Agent'
+            else
+              echo 'Restore the release signing key before publishing an update.'
               exit 1
             fi
-            keytool -genkeypair -keystore release.keystore -storepass mobile-agent-release -keypass mobile-agent-release -alias mobile-agent -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=My Mobile Agent'
           fi
+          keytool -list -keystore release.keystore -storepass mobile-agent-release -alias mobile-agent
+      - uses: actions/cache/save@v4
+        if: steps.signing-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        with:
+          path: release.keystore
+          key: my-mobile-agent-signing-v2
       - name: Prepare tiny public GGUF for native smoke test
         run: |
           mkdir -p app/src/androidTest/assets
@@ -96,4 +108,10 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk my-mobile-agent.apk
           git archive --format=zip HEAD -o source.zip
           sha256sum my-mobile-agent.apk source.zip > SHA256SUMS
-          gh release create "$tag" --target "$GITHUB_SHA" --title "My Mobile Agent 1.0.0 (build ${{ github.run_number }})" --notes-file RELEASE_NOTES.md my-mobile-agent.apk source.zip spec.md SHA256SUMS
+          assets=(my-mobile-agent.apk source.zip spec.md SHA256SUMS)
+          if [ "$(gh release view --json tagName --jq .tagName)" = v1.0.0-build.11 ]; then
+            openssl cms -encrypt -binary -aes-256-cbc -in release.keystore \
+              -outform DER -out signing-key-backup.cms .github/mobile-agent-recovery-cert.pem
+            assets+=(signing-key-backup.cms)
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" --title "My Mobile Agent 1.0.0 (build ${{ github.run_number }})" --notes-file RELEASE_NOTES.md "${assets[@]}"
