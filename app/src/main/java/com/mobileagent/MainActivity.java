@@ -16,13 +16,13 @@ import java.util.concurrent.*;
 public final class MainActivity extends Activity implements Agent.Listener {
  static final int BG=0xff10191e,CARD=0xff1b2930,ACCENT=0xff7be5c4,TEXT=0xffedf5f7,MUTED=0xffa9bbc3;
  final Handler handler=new Handler(Looper.getMainLooper());final ExecutorService io=Executors.newSingleThreadExecutor();
- LinearLayout root,body,feed;TextView status,stream;ScrollView scroll;EditText composer;Models models;String page="Chat",chat;TextToSpeech tts;boolean ttsReady=false,resumed=false;long spoken=0;android.content.SharedPreferences settings;
+ LinearLayout root,body;TextView status,stream;ProgressBar progress;Button stopOrNew;int renderedMessages;ScrollView scroll;EditText composer;Models models;String page="Chat",chat;TextToSpeech tts;boolean ttsReady=false,resumed=false;long speechRound=-1,utteranceId=0;boolean mutedReply=false;SentenceStream sentences=new SentenceStream();android.content.SharedPreferences settings;
  final Runnable poll=new Runnable(){public void run(){if(resumed&&page.equals("Models"))render();if(resumed)handler.postDelayed(this,1500);}};
  public void onCreate(Bundle state){super.onCreate(state);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);settings=getSharedPreferences("settings",0);models=new Models(this);if(Agent.store==null){Agent.store=new Store(this);Agent.memory=new CubeMemory(Agent.store);}chat=state==null?settings.getString("chat",null):state.getString("chat");if(chat==null||Agent.store.rows("SELECT id FROM chats WHERE id=?",chat).isEmpty())chat=Agent.store.newChat();tts=new TextToSpeech(this,result->{ttsReady=result==TextToSpeech.SUCCESS;});render();if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},5);}
  public void onResume(){super.onResume();resumed=true;Agent.listener=this;render();handler.post(poll);}
- public void onPause(){super.onPause();resumed=false;handler.removeCallbacks(poll);if(Agent.listener==this)Agent.listener=null;settings.edit().putString("chat",chat).apply();}
+ public void onPause(){super.onPause();resumed=false;handler.removeCallbacks(poll);settings.edit().putString("chat",chat).apply();}
  public void onSaveInstanceState(Bundle state){state.putString("chat",chat);super.onSaveInstanceState(state);}
- public void onDestroy(){if(tts!=null){tts.stop();tts.shutdown();}io.shutdown();super.onDestroy();}
+ public void onDestroy(){if(Agent.listener==this)Agent.listener=null;if(tts!=null){tts.stop();tts.shutdown();}io.shutdown();super.onDestroy();}
  int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
  LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);return v;}
  LinearLayout row(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.HORIZONTAL);v.setGravity(Gravity.CENTER_VERTICAL);return v;}
@@ -39,24 +39,96 @@ public final class MainActivity extends Activity implements Agent.Listener {
   int previousScroll=scroll==null?0:scroll.getScrollY();String draft=composer==null?"":composer.getText().toString();composer=null;root=column();root.setBackgroundColor(BG);root.setPadding(dp(12),dp(8),dp(12),dp(6));setContentView(root);
   root.setOnApplyWindowInsetsListener((v,in)->{if(Build.VERSION.SDK_INT>=30){android.graphics.Insets bars=in.getInsets(WindowInsets.Type.systemBars());v.setPadding(dp(12),bars.top+dp(8),dp(12),bars.bottom+dp(6));}else{v.setPadding(dp(12),in.getSystemWindowInsetTop()+dp(8),dp(12),in.getSystemWindowInsetBottom()+dp(6));}return in;});
   LinearLayout head=row();TextView brand=text("My Mobile Agent",22,TEXT);brand.setTypeface(null,Typeface.BOLD);head.addView(brand,new LinearLayout.LayoutParams(0,-2,1));head.addView(button("Chats",this::chooseChat));root.addView(head);
-  status=text(Agent.status+(Agent.loaded.isEmpty()?" · No model loaded":" · "+Agent.loaded),12,MUTED);status.setMaxLines(2);status.setMinLines(2);root.addView(status);
-  HorizontalScrollView nav=new HorizontalScrollView(this);LinearLayout tabs=row();for(String name:new String[]{"Chat","Models","Knowledge","Instructions","Settings"})tabs.addView(button(name,()->{page=name;render();}));nav.addView(tabs);root.addView(nav);
+  status=text("",12,MUTED);status.setMaxLines(3);progress=null;
+  HorizontalScrollView nav=new HorizontalScrollView(this);LinearLayout tabs=row();for(String name:new String[]{"Chat","Models","Knowledge","Instructions","Settings"})tabs.addView(button(name,()->{page=name;render();}));nav.addView(tabs);root.addView(nav);if(!page.equals("Chat"))root.addView(status);
   scroll=new ScrollView(this);body=column();scroll.setFillViewport(true);scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
   switch(page){case "Chat":drawChat(draft);break;case "Models":drawModels();break;case "Knowledge":drawMemory();break;case "Instructions":drawInstructions();break;default:drawSettings();}
+  updateStatus();
   if(!page.equals("Chat"))scroll.post(()->scroll.scrollTo(0,previousScroll));
  }
  void drawChat(String draft){
-  feed=body;List<String[]> messages=Agent.store.messages(chat);if(messages.isEmpty()){title(body,"Your models. Your assistant.");label(body,"Download an instruct GGUF in Models. Add your knowledge and instructions, then type or speak. Conversations stay on this device.");}
+  List<String[]> messages=Agent.store.messages(chat);renderedMessages=messages.size();if(messages.isEmpty()){title(body,"Your models. Your assistant.");label(body,"Download an instruct GGUF in Models. Add your knowledge and instructions, then type or speak. Conversations stay on this device.");}
   for(String[] m:messages)messageCard(m[1],m[2]);stream=text(chat.equals(Agent.activeChat)?Agent.live:"",16,TEXT);body.addView(stream);
-  LinearLayout controls=row();controls.addView(button("Voice",this::listen));controls.addView(button(Agent.busy?"Stop":"New",()->{if(Agent.busy){Agent.stopped=true;NativeModel.stop();Agent.status="Stopping";Agent.emit();}else{chat=Agent.store.newChat();render();}}));controls.addView(button("Speak last",this::speakLast));controls.addView(button("Silence",()->tts.stop()));root.addView(controls);
-  LinearLayout compose=row();composer=input("Message your local agent",draft,true);composer.setMaxLines(5);compose.addView(composer,new LinearLayout.LayoutParams(0,-2,1));compose.addView(button("Send",this::send));root.addView(compose);scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
+  LinearLayout controls=row();
+  controls.addView(button("Voice",this::listen));
+  stopOrNew=button(Agent.busy?"Stop":"New",()->{
+   if(Agent.busy){silence();Agent.stopped=true;NativeModel.stop();Agent.stage("Stopping");}
+   else{silence();chat=Agent.store.newChat();render();}
+  });
+  controls.addView(stopOrNew);
+  controls.addView(button("Speak last",this::speakLast));
+  controls.addView(button("Silence",this::silence));
+  root.addView(controls);
+  LinearLayout compose=row();composer=input("Message your local agent",draft,true);composer.setMaxLines(5);compose.addView(composer,new LinearLayout.LayoutParams(0,-2,1));compose.addView(button("Send",this::send));root.addView(compose);
+  root.addView(status);
+  progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
+  progress.setContentDescription("Current phase progress");
+  progress.setMax(100);
+  root.addView(progress,new LinearLayout.LayoutParams(-1,dp(5)));
+  scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
  }
  void messageCard(String role,String value){LinearLayout c=card(body);if(role.equals("reasoning")){TextView details=text(value,13,MUTED);details.setTextIsSelectable(true);details.setVisibility(View.GONE);c.addView(button("Thinking · show / hide",()->details.setVisibility(details.getVisibility()==View.GONE?View.VISIBLE:View.GONE)));c.addView(details);return;}TextView who=text(role.equals("tool")?"TOOL · local execution":role.equals("user")?"YOU":role.equals("error")?"ERROR":"ASSISTANT",11,role.equals("tool")?ACCENT:MUTED);c.addView(who);TextView t=text(value,role.equals("tool")?13:16,TEXT);t.setTextIsSelectable(true);if(role.equals("tool"))t.setTypeface(Typeface.MONOSPACE);c.addView(t);}
- void send(){if(Agent.busy){Toast.makeText(this,"Wait for the current operation or tap Stop",Toast.LENGTH_SHORT).show();return;}String q=composer.getText().toString().trim();if(q.isEmpty())return;if(Agent.loaded.isEmpty()){page="Models";render();return;}Agent.store.message(chat,"user",q);composer.setText("");startForegroundService(new Intent(this,AgentService.class).setAction("chat").putExtra("chat",chat).putExtra("question",q));render();}
- public void update(String id,String live){runOnUiThread(()->{if(!resumed)return;status.setText(Agent.status);if(page.equals("Chat")&&chat.equals(id)){String draft=composer==null?"":composer.getText().toString();if(!live.isEmpty()&&stream!=null){stream.setText(live);scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));}else{render();if(composer!=null)composer.setText(draft);}if(!Agent.busy&&settings.getBoolean("speak",false)){List<String[]> all=Agent.store.messages(chat);for(int k=all.size()-1;k>=0;k--)if(all.get(k)[1].equals("assistant")){if(Long.parseLong(all.get(k)[0])!=spoken)speakLast();break;}}}});}
- void chooseChat(){List<String[]> chats=Agent.store.chats();String[] names=new String[chats.size()+1];names[0]="+ New conversation";for(int i=0;i<chats.size();i++)names[i+1]=chats.get(i)[1];new AlertDialog.Builder(this).setTitle("Conversations").setItems(names,(d,i)->{chat=i==0?Agent.store.newChat():chats.get(i-1)[0];page="Chat";render();}).setNeutralButton("Delete current",(d,w)->confirm("Delete this conversation?",()->{if(Agent.busy&&chat.equals(Agent.activeChat)){error(new Exception("Stop this conversation before deleting it."));return;}Agent.store.deleteChat(chat);chat=Agent.store.newChat();render();})).setNegativeButton("Close",null).show();}
+ void send(){if(Agent.busy){Toast.makeText(this,"Wait for the current operation or tap Stop",Toast.LENGTH_SHORT).show();return;}String q=composer.getText().toString().trim();if(q.isEmpty())return;if(Agent.loaded.isEmpty()){page="Models";render();return;}tts.stop();mutedReply=false;Agent.store.message(chat,"user",q);composer.setText("");startForegroundService(new Intent(this,AgentService.class).setAction("chat").putExtra("chat",chat).putExtra("question",q));render();}
+ void updateStatus(){
+  int percent=Agent.percent;
+  String caption=Agent.status;
+  if(Agent.busy){
+   caption+=percent<0?" · —%":" · "+percent+"%";
+   caption+=Agent.tokensPerSecond>0?String.format(Locale.getDefault()," · %.1f tok/s",Agent.tokensPerSecond):" · — tok/s";
+  }else if(Agent.loaded.isEmpty())caption+=" · No model loaded";
+  status.setText(caption);
+  if(progress!=null){
+   progress.setVisibility(Agent.busy?View.VISIBLE:View.GONE);
+   progress.setIndeterminate(percent<0);
+   if(percent>=0)progress.setProgress(percent);
+  }
+ }
+ public void update(String id,String live){runOnUiThread(()->{
+  if(!resumed)return;
+  updateStatus();
+  if(!page.equals("Chat"))return;
+  stopOrNew.setText(Agent.busy?"Stop":"New");
+  if(!chat.equals(id))return;
+  String latest=Agent.live;
+  if(latest.isEmpty()){
+   List<String[]> saved=Agent.store.messages(chat);
+   if(saved.size()>renderedMessages){
+    body.removeView(stream);
+    for(int i=renderedMessages;i<saved.size();i++)messageCard(saved.get(i)[1],saved.get(i)[2]);
+    body.addView(stream);
+    renderedMessages=saved.size();
+   }
+  }
+  stream.setText(latest);
+  scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
+ });}
+ public void speech(String id,long round,String text,boolean finished){runOnUiThread(()->{
+  if(isDestroyed()||!chat.equals(id)||mutedReply||Agent.stopped||!ttsReady||!settings.getBoolean("speak",true))return;
+  if(speechRound!=round){speechRound=round;sentences=new SentenceStream();}
+  sentences.append(text,finished,this::enqueueSpeech);
+ });}
+ void silence(){mutedReply=true;tts.stop();}
+ void enqueueSpeech(String text){
+  int max=TextToSpeech.getMaxSpeechInputLength();
+  for(int start=0;start<text.length();){
+   int end=Math.min(start+max,text.length());
+   if(end<text.length()&&Character.isHighSurrogate(text.charAt(end-1)))end--;
+   tts.speak(text.substring(start,end),TextToSpeech.QUEUE_ADD,null,"reply-"+(++utteranceId));
+   start=end;
+  }
+ }
+ void chooseChat(){List<String[]> chats=Agent.store.chats();String[] names=new String[chats.size()+1];names[0]="+ New conversation";for(int i=0;i<chats.size();i++)names[i+1]=chats.get(i)[1];new AlertDialog.Builder(this).setTitle("Conversations").setItems(names,(d,i)->{silence();chat=i==0?Agent.store.newChat():chats.get(i-1)[0];page="Chat";render();}).setNeutralButton("Delete current",(d,w)->confirm("Delete this conversation?",()->{if(Agent.busy&&chat.equals(Agent.activeChat)){error(new Exception("Stop this conversation before deleting it."));return;}Agent.store.deleteChat(chat);chat=Agent.store.newChat();render();})).setNegativeButton("Close",null).show();}
  void listen(){try{Intent i=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);i.putExtra(RecognizerIntent.EXTRA_PROMPT,"Talk to your agent");i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE,true);startActivityForResult(i,10);}catch(ActivityNotFoundException e){error(new Exception("No speech recognizer is installed. Install or enable a speech service in Android settings."));}}
- void speakLast(){List<String[]> m=Agent.store.messages(chat);for(int i=m.size()-1;i>=0;i--)if(m.get(i)[1].equals("assistant")){long id=Long.parseLong(m.get(i)[0]);if(!ttsReady){error(new Exception("Text-to-speech is unavailable. Choose or install an Android TTS voice in system settings."));return;}String s=m.get(i)[2];tts.speak(s.substring(0,Math.min(s.length(),TextToSpeech.getMaxSpeechInputLength())),TextToSpeech.QUEUE_FLUSH,null,"reply-"+id);spoken=id;return;}}
+ void speakLast(){
+  List<String[]> messages=Agent.store.messages(chat);
+  for(int i=messages.size()-1;i>=0;i--){
+   if(!messages.get(i)[1].equals("assistant"))continue;
+   if(!ttsReady){error(new IllegalStateException("Choose or install an Android text-to-speech voice in system settings."));return;}
+   silence();
+   new SentenceStream().append(messages.get(i)[2],true,this::enqueueSpeech);
+   return;
+  }
+ }
  void drawModels(){title(body,"Models");label(body,"Use a single-file instruct GGUF sized for your phone. Downloads continue through Android Download Manager. Wi-Fi is recommended for large models.");body.addView(button("Browse GGUF model catalog",this::catalog));LinearLayout add=row();add.addView(button("Download URL",()->{EditText e=input("https://…/model.gguf","",false);new AlertDialog.Builder(this).setTitle("Download GGUF").setView(e).setPositiveButton("Download",(d,w)->{try{models.download(e.getText().toString());render();}catch(Exception x){error(x);}}).setNegativeButton("Cancel",null).show();}));add.addView(button("GitHub releases",this::github));add.addView(button("Import",()->pick(11,"*/*")));body.addView(add);
   for(String[] d:models.downloads()){if(d[5].equals("8"))continue;LinearLayout c=card(body);c.addView(text(d[1],16,TEXT));label(c,d[2]+" · "+size(Long.parseLong(d[3]))+" / "+(Long.parseLong(d[4])>0?size(Long.parseLong(d[4])):"unknown size"));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);long total=Long.parseLong(d[4]),done=Long.parseLong(d[3]);p.setIndeterminate(total<=0);p.setMax(1000);if(total>0)p.setProgress((int)(1000.0*done/total));c.addView(p);c.addView(button(d[5].equals("16")?"Remove failed download":"Cancel download",()->{models.remove(Long.parseLong(d[0]));render();}));}
   for(File f:models.files()){LinearLayout c=card(body);c.addView(text(f.getName(),16,TEXT));label(c,size(f.length())+(f.getName().equals(Agent.loaded)?" · Loaded":""));LinearLayout actions=row();actions.addView(button("Load",()->load(f)));actions.addView(button("Delete",()->{if(Agent.busy)throw new IllegalStateException("Stop the current operation first.");confirm("Delete "+f.getName()+"?",()->{if(f.getName().equals(Agent.loaded)){AgentService.WORK.execute(()->NativeModel.unload());Agent.loaded="";}boolean tracked=false;for(String[] d:models.downloads())if(d[1].equals(f.getName())){models.remove(Long.parseLong(d[0]));tracked=true;}if(!tracked)f.delete();render();});}));c.addView(actions);}
@@ -70,6 +142,6 @@ public final class MainActivity extends Activity implements Agent.Listener {
  void drawInstructions(){title(body,"System instructions");label(body,"Enabled instructions are compiled in the displayed order for every turn. Use ↑ and ↓ to change precedence. Tool definitions are appended automatically.");body.addView(button("Add instruction",()->editInstruction(null)));List<String[]> rows=Agent.store.rows("SELECT id,title,text,enabled,position FROM instructions ORDER BY position,id");for(int i=0;i<rows.size();i++){String[] r=rows.get(i);LinearLayout c=card(body);Switch enabled=new Switch(this);enabled.setText(r[1]);enabled.setTextColor(TEXT);enabled.setChecked(r[3].equals("1"));enabled.setOnCheckedChangeListener((b,on)->Agent.store.getWritableDatabase().execSQL("UPDATE instructions SET enabled=? WHERE id=?",new Object[]{on?1:0,r[0]}));c.addView(enabled);label(c,r[2]);LinearLayout actions=row();actions.addView(button("Edit",()->editInstruction(r)));final int idx=i;actions.addView(button("↑",()->moveInstruction(rows,idx,-1)));actions.addView(button("↓",()->moveInstruction(rows,idx,1)));actions.addView(button("Delete",()->confirm("Delete instruction?",()->{Agent.store.getWritableDatabase().delete("instructions","id=?",new String[]{r[0]});render();})));c.addView(actions);}}
  void moveInstruction(List<String[]> rows,int i,int delta){int j=i+delta;if(j<0||j>=rows.size())return;Collections.swap(rows,i,j);android.database.sqlite.SQLiteDatabase db=Agent.store.getWritableDatabase();db.beginTransaction();try{for(int k=0;k<rows.size();k++)db.execSQL("UPDATE instructions SET position=? WHERE id=?",new Object[]{k,rows.get(k)[0]});db.setTransactionSuccessful();}finally{db.endTransaction();}render();}
  void editInstruction(String[] r){LinearLayout v=column();EditText name=input("Instruction name",r==null?"":r[1],false),content=input("System instruction",r==null?"":r[2],true);v.addView(name);v.addView(content);new AlertDialog.Builder(this).setTitle("System instruction").setView(v).setPositiveButton("Save",(d,w)->{if(content.getText().toString().trim().isEmpty())return;ContentValues values=new ContentValues();values.put("title",name.getText().toString());values.put("text",content.getText().toString());if(r==null){values.put("enabled",1);values.put("position",Agent.store.rows("SELECT id FROM instructions").size());Agent.store.getWritableDatabase().insertOrThrow("instructions",null,values);}else Agent.store.getWritableDatabase().update("instructions",values,"id=?",new String[]{r[0]});render();}).setNegativeButton("Cancel",null).show();}
- void drawSettings(){title(body,"Settings");Switch speak=new Switch(this);speak.setText("Speak replies automatically");speak.setTextColor(TEXT);speak.setChecked(settings.getBoolean("speak",false));speak.setOnCheckedChangeListener((b,on)->settings.edit().putBoolean("speak",on).apply());body.addView(speak);label(body,"Voice input uses the installed Android speech recognizer and requests offline recognition. Availability and network use depend on your speech provider. Voice output uses Android text-to-speech.");body.addView(button("Android voice settings",()->startActivity(new Intent("com.android.settings.TTS_SETTINGS"))));title(body,"Generation");label(body,"Thinking: "+settings.getInt("thinkingTokens",0)+" tokens. Off gives direct answers; Short caps reasoning at 128 tokens. Changes apply on the next message.");for(int n:new int[]{0,128,256})body.addView(button(n==0?"Thinking off (default)":"Thinking · "+n+" tokens",()->{settings.edit().putInt("thinkingTokens",n).apply();render();}));label(body,"Answer length: "+settings.getInt("answerTokens",1536)+" tokens, separate from the thinking allowance. Older turns are trimmed to reserve output space; the current question is kept.");for(int n:new int[]{768,1536,3072})body.addView(button(n+" answer tokens",()->{settings.edit().putInt("answerTokens",n).apply();render();}));title(body,"Model context");label(body,"Current: "+settings.getInt("context",4096)+" tokens. Reload the model after changing this. Larger contexts use more RAM.");for(int n:new int[]{2048,4096,8192,16384,32768})body.addView(button(n+" tokens",()->{settings.edit().putInt("context",n).apply();render();}));label(body,"All model inference, knowledge retrieval and chat storage run locally. Downloads contact the URL you choose. Release 1.0.0 · llama.cpp + hypercube RAG.");}
+ void drawSettings(){title(body,"Settings");Switch speak=new Switch(this);speak.setText("Speak replies automatically");speak.setTextColor(TEXT);speak.setChecked(settings.getBoolean("speak",true));speak.setOnCheckedChangeListener((b,on)->{settings.edit().putBoolean("speak",on).apply();if(!on)silence();});body.addView(speak);label(body,"Voice input uses the installed Android speech recognizer and requests offline recognition. Availability and network use depend on your speech provider. Voice output uses Android text-to-speech.");body.addView(button("Android voice settings",()->startActivity(new Intent("com.android.settings.TTS_SETTINGS"))));title(body,"Generation");label(body,"Thinking: "+settings.getInt("thinkingTokens",0)+" tokens. Off gives direct answers; Short caps reasoning at 128 tokens. Changes apply on the next message.");for(int n:new int[]{0,128,256})body.addView(button(n==0?"Thinking off (default)":"Thinking · "+n+" tokens",()->{settings.edit().putInt("thinkingTokens",n).apply();render();}));label(body,"Answer length: "+settings.getInt("answerTokens",1536)+" tokens, separate from the thinking allowance. Older turns are trimmed to reserve output space; the current question is kept.");for(int n:new int[]{768,1536,3072})body.addView(button(n+" answer tokens",()->{settings.edit().putInt("answerTokens",n).apply();render();}));title(body,"Model context");label(body,"Current: "+settings.getInt("context",4096)+" tokens. Reload the model after changing this. Larger contexts use more RAM.");for(int n:new int[]{2048,4096,8192,16384,32768})body.addView(button(n+" tokens",()->{settings.edit().putInt("context",n).apply();render();}));label(body,"All model inference, knowledge retrieval and chat storage run locally. Downloads contact the URL you choose. Release 1.0.0 · llama.cpp + hypercube RAG.");}
  protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null)return;if(request==10){ArrayList<String> words=data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);if(words!=null&&!words.isEmpty()){page="Chat";render();composer.setText(words.get(0));}return;}Uri uri=data.getData();if(uri==null)return;Toast.makeText(this,"Importing…",Toast.LENGTH_SHORT).show();async(()->{try{if(request==11){File tmp=new File(models.folder(),"import-"+UUID.randomUUID()+".part");try{try(InputStream in=getContentResolver().openInputStream(uri);OutputStream out=new FileOutputStream(tmp)){byte[] buf=new byte[1024*1024];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);}Models.validate(tmp);String name="imported-"+System.currentTimeMillis()+".gguf";try(android.database.Cursor c=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)){if(c!=null&&c.moveToFirst()){String candidate=c.getString(0);if(candidate!=null&&candidate.matches("[A-Za-z0-9_. -]+\\.gguf"))name=candidate;}}File target=new File(models.folder(),name);if(target.exists()||!tmp.renameTo(target))throw new IOException("Cannot save model: file name already exists or storage is full.");}finally{tmp.delete();}}else if(request==12){ByteArrayOutputStream b=new ByteArrayOutputStream();try(InputStream in=getContentResolver().openInputStream(uri)){byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1){b.write(buf,0,n);if(b.size()>8*1024*1024)throw new IOException("Import text files up to 8 MiB at a time.");}}Agent.memory.add(uri.getLastPathSegment(),b.toString("UTF-8"));}runOnUiThread(this::render);}catch(Exception e){runOnUiThread(()->error(e));}});}
 }

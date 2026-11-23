@@ -25,6 +25,18 @@ public class IntegrationTest {
   assertNull(Agent.call("A normal answer."));assertEquals("knowledge.search",Agent.call("<think>Need evidence.</think>{\"tool\":\"knowledge.search\",\"arguments\":{}}").getString("tool"));assertEquals("knowledge.search",Agent.call("```json\n{\"tool\":\"knowledge.search\",\"arguments\":{\"query\":\"lunar\"}}\n```").getString("tool"));
   db.getWritableDatabase().execSQL("INSERT INTO instructions(title,text,enabled,position) VALUES('later','Later rule',1,10)");db.getWritableDatabase().execSQL("INSERT INTO instructions(title,text,enabled,position) VALUES('off','Disabled secret',0,-1)");assertTrue(db.instructions().indexOf("helpful")<db.instructions().indexOf("Later rule"));assertFalse(db.instructions().contains("Disabled secret"));
  }
+ @Test public void streamingSpeechQueuesEachSentenceOnce(){
+  SentenceStream speech=new SentenceStream();
+  List<String> queued=new ArrayList<>();
+  speech.append("First sentence",false,queued::add);
+  assertTrue(queued.isEmpty());
+  speech.append("First sentence. Second",false,queued::add);
+  assertEquals(Collections.singletonList("First sentence."),queued);
+  speech.append("First sentence. Second sentence. Final",false,queued::add);
+  speech.append("First sentence. Second sentence. Final",true,queued::add);
+  speech.append("First sentence. Second sentence. Final",true,queued::add);
+  assertEquals(Arrays.asList("First sentence.","Second sentence.","Final"),queued);
+ }
  @Test public void realGgufNativeInference()throws Exception{
   File model=new File(context.getFilesDir(),"smoke.gguf");try(InputStream in=InstrumentationRegistry.getInstrumentation().getContext().getAssets().open("smoke.gguf");OutputStream out=new FileOutputStream(model)){byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);}
   Models.validate(model);NativeModel.load(model.getAbsolutePath(),2048,2);byte[][] last={null};byte[] result=NativeModel.generate("[{\"role\":\"system\",\"content\":\"Tell stories.\"},{\"role\":\"user\",\"content\":\"Once upon a time, a little cat\"}]","[]",256,0,false,b->last[0]=b);JSONObject response=new JSONObject(new String(result,StandardCharsets.UTF_8));assertFalse(response.optString("content").isEmpty());assertNotNull(last[0]);assertTrue(response.getInt("output_tokens")>0);

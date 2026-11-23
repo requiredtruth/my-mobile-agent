@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -62,15 +63,24 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
  if(available<256)throw std::runtime_error("Current question, instructions and tool results leave fewer than 256 output tokens. Shorten the question/instructions or increase context in Settings and reload.");
  int limit=std::min(desired,available);
  const int effectiveThinking=std::min(std::clamp((int)thinkLimit,0,256),std::max(0,limit-288));
+ auto cls=e->GetObjectClass(cb);auto method=e->GetMethodID(cls,"token","([B)V");e->DeleteLocalRef(cls);
+ auto publish=[&](const std::string& json){
+  auto a=bytes(e,json);e->CallVoidMethod(cb,method,a);e->DeleteLocalRef(a);
+  return !e->ExceptionCheck();
+ };
  llama_memory_clear(llama_get_memory(ctx),true);
- for(size_t off=0;off<tokens.size()&&!cancelled;off+=256){int size=std::min(size_t(256),tokens.size()-off);if(llama_decode(ctx,llama_batch_get_one(tokens.data()+off,size)))throw std::runtime_error("Prompt evaluation failed; reduce context or model size.");}
+ for(size_t off=0;off<tokens.size()&&!cancelled;off+=256){
+  if(!publish(common_json{{"prompt_tokens",off},{"prompt_total",tokens.size()}}.dump()))return nullptr;
+  int size=std::min(size_t(256),tokens.size()-off);
+  if(llama_decode(ctx,llama_batch_get_one(tokens.data()+off,size)))throw std::runtime_error("Prompt evaluation failed; reduce context or model size.");
+ }
  if(cancelled)return bytes(e,"{\"content\":\"\",\"finish_reason\":\"stopped\"}");
  common_params_sampling sp;sp.temp=.6f;sp.top_k=40;sp.top_p=.9f;session->apply_sampling(sp);
  std::unique_ptr<common_sampler,decltype(&common_sampler_free)> sampler(common_sampler_init(model,sp),common_sampler_free);
  if(!sampler)throw std::runtime_error("Cannot initialize model sampler");
- auto cls=e->GetObjectClass(cb);auto method=e->GetMethodID(cls,"token","([B)V");e->DeleteLocalRef(cls);
+ const auto started=std::chrono::steady_clock::now();
  std::string raw,finish="length";int used=0,thinkingTokens=0;bool capped=false;
- auto snapshot=[&](){auto j=session->msg().to_json_oaicompat();j["finish_reason"]=finish;j["output_tokens"]=used;j["output_budget"]=limit;j["trimmed_turns"]=trimmed;j["thinking_capped"]=capped;return j.dump_safe();};
+ auto snapshot=[&](){auto j=session->msg().to_json_oaicompat();j["finish_reason"]=finish;j["output_tokens"]=used;j["output_budget"]=limit;j["elapsed_ms"]=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();j["trimmed_turns"]=trimmed;j["thinking_capped"]=capped;return j.dump_safe();};
  auto feed=[&](llama_token token){
   common_sampler_accept(sampler.get(),token,true);
   std::vector<char> piece(256);int n=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);if(n<0){piece.resize(-n);n=llama_token_to_piece(vocab,token,piece.data(),piece.size(),0,true);}
@@ -93,7 +103,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
   }
   bool stop=false;for(auto& end:session->additional_stops())if(!end.empty()&&raw.size()>=end.size()&&raw.compare(raw.size()-end.size(),end.size(),end)==0)stop=true;
   if(stop){finish="stop";break;}
-  auto a=bytes(e,snapshot());e->CallVoidMethod(cb,method,a);e->DeleteLocalRef(a);if(e->ExceptionCheck())return nullptr;
+  if(!publish(snapshot()))return nullptr;
  }
  if(cancelled)finish="stopped";
  // Partial parsing is intentional on cancellation/length: never turn incomplete tool syntax into execution.
