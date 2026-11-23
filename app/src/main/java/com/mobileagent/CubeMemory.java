@@ -26,7 +26,14 @@ public final class CubeMemory implements AutoCloseable {
  }
  public synchronized String search(String q)throws JSONException,IOException{
   List<String[]> groups=store.rows("SELECT DISTINCT CAST(id/64 AS INTEGER) FROM passages ORDER BY 1");LinkedHashMap<String,Double> ids=new LinkedHashMap<>();int scanned=0;long[] query=Hypercube.encode(q);if(query==null)return "[]";
-  for(String[] g:groups){if(Agent.stopped)throw new java.util.concurrent.CancellationException("Stopped knowledge search");info="Searching cube group "+(++scanned)+" / "+groups.size();Agent.stage(info);for(Map.Entry<String,long[]> entry:group(Long.parseLong(g[0])).entrySet()){double score=Hypercube.similarity(query,entry.getValue());if(score>=.055)ids.put(entry.getKey(),score);}}
+  if(!groups.isEmpty())Agent.progress("Searching knowledge cubes",0,groups.size(),"groups",0);
+  for(String[] g:groups){
+   if(Agent.stopped)throw new java.util.concurrent.CancellationException("Stopped knowledge search");
+   for(Map.Entry<String,long[]> entry:group(Long.parseLong(g[0])).entrySet()){
+    double score=Hypercube.similarity(query,entry.getValue());if(score>=.055)ids.put(entry.getKey(),score);
+   }
+   Agent.progress("Searching knowledge cubes",++scanned,groups.size(),"groups",0);
+  }
 
   List<Map.Entry<String,Double>> ranked=new ArrayList<>(ids.entrySet());ranked.sort((a,b)->Double.compare(b.getValue(),a.getValue()));JSONArray out=new JSONArray();for(Map.Entry<String,Double> id:ranked){for(String[] p:store.rows("SELECT source,text FROM passages WHERE id=?",id.getKey()))out.put(new JSONObject().put("passage",id.getKey()).put("source",p[0]).put("cube_score",id.getValue()).put("text",p[1]));if(out.length()>=4)break;}
   info=groups.size()+" cube groups · 4,096 dimensions · cached on disk";return out.toString();

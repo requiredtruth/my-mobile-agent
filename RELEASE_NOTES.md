@@ -1,4 +1,4 @@
-- View the current stage, percentage, and tokens per second below the chat buttons. Prompt progress measures tokens read. Reply progress measures the generation budget used.
+- View the current stage, percentage, and tokens per second below the chat buttons. Prefill reports processed prompt tokens, percentage and speed. Reply progress tracks the generation budget used. The elapsed timer keeps ticking through preparation, retrieval and pauses between token updates.
 - See the local model's reply grow in place as text arrives.
 - Automatic voice playback queues completed sentences in order and reads the final fragment when generation ends. Use Silence to mute the current reply or Settings to control automatic playback.
 

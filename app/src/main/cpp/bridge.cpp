@@ -69,10 +69,16 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
   return !e->ExceptionCheck();
  };
  llama_memory_clear(llama_get_memory(ctx),true);
+ const auto prefillStarted=std::chrono::steady_clock::now();
+ auto prefill=[&](size_t done){
+  auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-prefillStarted).count();
+  return publish(common_json{{"prompt_tokens",done},{"prompt_total",tokens.size()},{"elapsed_ms",elapsed}}.dump());
+ };
+ if(!prefill(0))return nullptr;
  for(size_t off=0;off<tokens.size()&&!cancelled;off+=256){
-  if(!publish(common_json{{"prompt_tokens",off},{"prompt_total",tokens.size()}}.dump()))return nullptr;
   int size=std::min(size_t(256),tokens.size()-off);
   if(llama_decode(ctx,llama_batch_get_one(tokens.data()+off,size)))throw std::runtime_error("Prompt evaluation failed; reduce context or model size.");
+  if(!prefill(off+size))return nullptr;
  }
  if(cancelled)return bytes(e,"{\"content\":\"\",\"finish_reason\":\"stopped\"}");
  common_params_sampling sp;sp.temp=.6f;sp.top_k=40;sp.top_p=.9f;session->apply_sampling(sp);

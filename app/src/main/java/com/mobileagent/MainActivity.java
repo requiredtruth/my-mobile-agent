@@ -18,10 +18,15 @@ public final class MainActivity extends Activity implements Agent.Listener {
  static final int BG=0xff10191e,CARD=0xff1b2930,ACCENT=0xff7be5c4,TEXT=0xffedf5f7,MUTED=0xffa9bbc3;
  final Handler handler=new Handler(Looper.getMainLooper());final ExecutorService io=Executors.newSingleThreadExecutor();
  LinearLayout root,body;TextView status,stream;ProgressBar progress;Button stopOrNew;int renderedMessages;ScrollView scroll;EditText composer;Models models;String page="Chat",chat,pendingExport;TextToSpeech tts;boolean ttsReady=false,resumed=false;long speechRound=-1,utteranceId=0;boolean mutedReply=false;SentenceStream sentences=new SentenceStream();android.content.SharedPreferences settings;
+ final Runnable statusTick=new Runnable(){public void run(){
+  if(!resumed)return;
+  if(Agent.busy)updateStatus();
+  handler.postDelayed(this,250);
+ }};
  final Runnable poll=new Runnable(){public void run(){if(resumed&&page.equals("Models"))render();if(resumed)handler.postDelayed(this,1500);}};
  public void onCreate(Bundle state){super.onCreate(state);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);settings=getSharedPreferences("settings",0);pendingExport=state==null?null:state.getString("pendingExport");models=new Models(this);if(Agent.store==null){Agent.store=new Store(this);Agent.memory=new CubeMemory(Agent.store);}chat=state==null?settings.getString("chat",null):state.getString("chat");if(chat==null||Agent.store.rows("SELECT id FROM chats WHERE id=?",chat).isEmpty())chat=Agent.store.newChat();tts=new TextToSpeech(this,result->{ttsReady=result==TextToSpeech.SUCCESS;});render();if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},5);}
- public void onResume(){super.onResume();resumed=true;Agent.listener=this;render();handler.post(poll);}
- public void onPause(){super.onPause();resumed=false;handler.removeCallbacks(poll);settings.edit().putString("chat",chat).apply();}
+ public void onResume(){super.onResume();resumed=true;Agent.listener=this;render();handler.post(poll);handler.post(statusTick);}
+ public void onPause(){super.onPause();resumed=false;handler.removeCallbacks(poll);handler.removeCallbacks(statusTick);settings.edit().putString("chat",chat).apply();}
  public void onSaveInstanceState(Bundle state){state.putString("chat",chat);state.putString("pendingExport",pendingExport);super.onSaveInstanceState(state);}
  public void onDestroy(){if(Agent.listener==this)Agent.listener=null;if(tts!=null){tts.stop();tts.shutdown();}io.shutdown();super.onDestroy();}
  int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
@@ -82,8 +87,9 @@ public final class MainActivity extends Activity implements Agent.Listener {
   int percent=Agent.percent;
   String caption=Agent.status;
   if(Agent.busy){
-   caption+=percent<0?" · —%":" · "+percent+"%";
-   caption+=Agent.tokensPerSecond>0?String.format(Locale.getDefault()," · %.1f tok/s",Agent.tokensPerSecond):" · — tok/s";
+   caption+=percent<0?"":" · "+percent+"%";
+   caption+=Agent.tokensPerSecond>0?String.format(Locale.getDefault()," · %.1f tok/s",Agent.tokensPerSecond):"";
+   caption+=String.format(Locale.getDefault()," · %.1fs",Math.max(0,SystemClock.elapsedRealtime()-Agent.phaseStarted)/1000.0);
   }else if(Agent.loaded.isEmpty())caption+=" · No model loaded";
   status.setText(caption);
   if(progress!=null){
