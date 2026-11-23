@@ -28,6 +28,7 @@ jobs:
         run: |
           mkdir -p vendor/llama.cpp
           curl --fail --location --retry 3 https://codeload.github.com/ggml-org/llama.cpp/tar.gz/d38bea34227bbf9069d62fdc239c98ab6e05435a | tar xz -C vendor/llama.cpp --strip-components=1
+          git -C vendor/llama.cpp apply "$PWD/.github/patches/android-vulkan-dispatch.patch"
       - name: Verify Spark formatting and native bridge API
         run: |
           cmake -S tests -B native-test -DCMAKE_BUILD_TYPE=Release
