@@ -107,11 +107,11 @@ static bool restore_prefix(const std::string& path,const std::vector<llama_token
 
 // Render the real chat template with different first user turns. Their common token
 // prefix can be prefetched without evaluating either user turn or assistant header.
-extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_preparePrefix(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_mobileagent_NativeModel_preparePrefix(
  JNIEnv* e,jclass,jstring file,jstring system,jstring tools,jboolean thinking,jobject cb){
- if(!ctx||!model)return;
+ if(!ctx||!model)return JNI_FALSE;
  const auto path=str(e,file), instruction=str(e,system), tool_defs=str(e,tools);
- if(prefix_file==path&&prefix_system==instruction&&prefix_tools==tool_defs&&prefix_thinking==thinking)return;
+ if(prefix_file==path&&prefix_system==instruction&&prefix_tools==tool_defs&&prefix_thinking==thinking&&access(path.c_str(),R_OK)==0)return JNI_TRUE;
  prefix_file.clear();
  prefix_tokens.clear();
  cancelled=false;
@@ -128,7 +128,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_preparePrefix
   auto first=render("Apple");
   auto second=render("Zebra");
   auto common=std::mismatch(first.begin(),first.end(),second.begin(),second.end()).first-first.begin();
-  if(common==0||common>=std::min(first.size(),second.size())||common+257>=llama_n_ctx(ctx))return;
+  if(common==0||common>=std::min(first.size(),second.size())||common+257>=llama_n_ctx(ctx))return JNI_FALSE;
   first.resize(common);
   auto cls=e->GetObjectClass(cb);
   auto method=e->GetMethodID(cls,"token","([B)V");
@@ -141,22 +141,22 @@ extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_preparePrefix
   };
   llama_memory_clear(llama_get_memory(ctx),true);
   if(restore_prefix(path,first)){
-   if(!progress(common,true))return;
+   if(!progress(common,true))return JNI_FALSE;
   }else{
    llama_memory_clear(llama_get_memory(ctx),true);
-   if(!progress(0,false))return;
+   if(!progress(0,false))return JNI_FALSE;
    for(size_t off=0;off<first.size()&&!cancelled;){
     int size=std::min(size_t(256),first.size()-off);
-    if(llama_decode(ctx,llama_batch_get_one(first.data()+off,size)))return;
+    if(llama_decode(ctx,llama_batch_get_one(first.data()+off,size)))return JNI_FALSE;
     off+=size;
-    if(!progress(off,false))return;
+    if(!progress(off,false))return JNI_FALSE;
    }
-   if(cancelled)return;
+   if(cancelled)return JNI_FALSE;
    const auto tmp=path+".tmp";
    if(!llama_state_seq_save_file(ctx,tmp.c_str(),0,first.data(),first.size())
        ||std::rename(tmp.c_str(),path.c_str())!=0){
     std::remove(tmp.c_str());
-    return;
+    return JNI_FALSE;
    }
   }
   prefix_file=path;
@@ -164,8 +164,10 @@ extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_preparePrefix
   prefix_tools=tool_defs;
   prefix_thinking=thinking;
   prefix_tokens=std::move(first);
+  return JNI_TRUE;
  }catch(const std::exception& ex){
   std::fprintf(stderr,"Instruction cache unavailable: %s\n",ex.what());
+  return JNI_FALSE;
  }
 }
 

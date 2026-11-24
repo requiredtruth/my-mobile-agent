@@ -52,13 +52,13 @@ public class IntegrationTest {
   JSONObject response=new JSONObject(new String(result,StandardCharsets.UTF_8));assertFalse(response.optString("content").isEmpty());assertNotNull(last[0]);assertTrue(response.getInt("output_tokens")>0);
   File cache=new File(context.getCacheDir(),"smoke-instructions.kv");
   cache.delete();
-  NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,b->{});
+  assertTrue(NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,b->{}));
   assertTrue(cache.length()>0);
   assertCachedPrompt("Tell stories.","Once upon a time, a little fox",true);
   NativeModel.unload();
   NativeModel.load(model.getAbsolutePath(),2048,2);
   int[] restored={0};
-  NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,b->restored[0]=cachedTokens(b));
+  assertTrue(NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,b->restored[0]=cachedTokens(b)));
   assertTrue(restored[0]>0);
   assertCachedPrompt("Tell stories.","Once upon a time, a little dog",true);
   assertCachedPrompt("Write recipes.","Once upon a time, a little dog",false);

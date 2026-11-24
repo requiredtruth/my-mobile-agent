@@ -1,4 +1,3 @@
-- Watch reasoning-capable GGUF models stream their Thinking text in a separate expandable card.
-- Speak thinking is on by default and is independent of automatic reply playback.
-- Loading a model prepares and saves the initial instruction KV cache. Subsequent prompts and new chats reuse it when their rendered token prefix matches. Prefill status shows the reused token count.
-- Two smaller Q4_K_M models are available at the bottom of the catalog for quick testing. SmolLM2 135M is approximately 101 MiB and SmolLM2 360M is approximately 258 MiB.
+- Auto-send voice submits after restoring the last model or selecting a model on first use.
+- Auto-send voice and Speak thinking appear side by side.
+- Settings shows whether the instruction KV cache is ready. The cache is stored in persistent private app storage and restored when reopening the app.

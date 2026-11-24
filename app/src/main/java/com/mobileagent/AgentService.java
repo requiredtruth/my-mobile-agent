@@ -2,6 +2,7 @@ package com.mobileagent;
 import android.app.*;
 import android.content.*;
 import android.os.*;
+import java.io.File;
 import java.util.concurrent.*;
 public final class AgentService extends Service {
  public static final ExecutorService WORK=Executors.newSingleThreadExecutor();
@@ -12,19 +13,55 @@ public final class AgentService extends Service {
   Agent.busy=true;Agent.stopped=false;String action=i.getAction();String chat=i.getStringExtra("chat");
   if(chat!=null)Agent.activeChat=chat;
   Agent.stage("load".equals(action)?"Loading model":"Starting reply");
-  WORK.execute(()->{PowerManager.WakeLock lock=getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"mobileagent:inference");lock.acquire(30*60*1000L);try{if("load".equals(action)){java.io.File f=new java.io.File(i.getStringExtra("path"));Models.validate(f);Agent.loaded="";android.content.SharedPreferences settings=getSharedPreferences("settings",0);
-    boolean preferGpu=settings.getBoolean("gpu",true);
-    Agent.stage(preferGpu?"Loading model · checking GPU":"Loading model on CPU");
-    Agent.backend=NativeModel.loadBackend(f.getAbsolutePath(),settings.getInt("context",4096),
-      Runtime.getRuntime().availableProcessors(),preferGpu);Agent.loaded=f.getName();
-    String identity=f.getCanonicalPath()+"\n"+f.length()+"\n"+f.lastModified()+"\n"+
-      settings.getInt("context",4096)+"\n"+Agent.backend+"\n"+getPackageManager().getPackageInfo(getPackageName(),0).versionCode;
-    String key=android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256")
-      .digest(identity.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-      android.util.Base64.URL_SAFE|android.util.Base64.NO_WRAP|android.util.Base64.NO_PADDING);
-    Agent.prefixFile=new java.io.File(getCacheDir(),"instructions-"+key+".kv").getAbsolutePath();
-    Agent.preparePrefix(Agent.store.instructions()+"\n"+Agent.TOOLS,settings.getInt("thinkingTokens",0)>0);
-    getSharedPreferences("settings",0).edit().putString("model",f.getAbsolutePath()).apply();Agent.status="Ready";}else {Agent.answerTokens=getSharedPreferences("settings",0).getInt("answerTokens",1536);Agent.thinkingTokens=getSharedPreferences("settings",0).getInt("thinkingTokens",0);Agent.run(chat,i.getStringExtra("question"));}}catch(Throwable e){Agent.status="Error: "+e.getMessage();}finally{Agent.busy=false;if(lock.isHeld())lock.release();Agent.emit();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();}});return START_NOT_STICKY;
+  WORK.execute(()->{
+   PowerManager.WakeLock lock=getSystemService(PowerManager.class).newWakeLock(
+     PowerManager.PARTIAL_WAKE_LOCK,"mobileagent:inference");
+   lock.acquire(30*60*1000L);
+   try{
+    SharedPreferences settings=getSharedPreferences("settings",0);
+    if("load".equals(action)){
+     load(new File(i.getStringExtra("path")),settings);
+     Agent.stage(Agent.stopped?"Stopped":"Ready");
+    }else{
+     String question=i.getStringExtra("question");
+     Agent.store.message(chat,"user",question);
+     if(Agent.loaded.isEmpty()){
+      String path=i.getStringExtra("path");
+      if(path==null)path=settings.getString("model","");
+      load(new File(path),settings);
+     }
+     if(!Agent.stopped){
+      Agent.answerTokens=settings.getInt("answerTokens",1536);
+      Agent.thinkingTokens=settings.getInt("thinkingTokens",0);
+      Agent.run(chat,question);
+     }else Agent.stage("Stopped");
+    }
+   }catch(Throwable e){
+    Agent.stage("Error · "+e.getMessage());
+    if(chat!=null)Agent.store.message(chat,"error",e.getMessage()==null?e.toString():e.getMessage());
+   }finally{
+    if(lock.isHeld())lock.release();
+    stopForeground(STOP_FOREGROUND_REMOVE);
+    stopSelf();
+    Agent.busy=false;
+    Agent.emit();
+   }
+  });
+  return START_NOT_STICKY;
+ }
+ private void load(File file,SharedPreferences settings)throws Exception{
+  Models.validate(file);
+  Agent.loaded="";
+  Agent.instructionCache=null;
+  boolean preferGpu=settings.getBoolean("gpu",true);
+  int context=settings.getInt("context",4096);
+  Agent.stage(preferGpu?"Loading model · checking GPU":"Loading model on CPU");
+  Agent.backend=NativeModel.loadBackend(file.getAbsolutePath(),context,
+    Runtime.getRuntime().availableProcessors(),preferGpu);
+  Agent.loaded=file.getName();
+  settings.edit().putString("model",file.getAbsolutePath()).apply();
+  Agent.instructionCache=new InstructionCache(this,file,Agent.backend,context);
+  Agent.preparePrefix(Agent.store.instructions()+"\n"+Agent.TOOLS,settings.getInt("thinkingTokens",0)>0);
  }
  public void onTimeout(int startId,int fgsType){Agent.stopped=true;NativeModel.stop();stopSelf();}
  public IBinder onBind(Intent i){return null;}

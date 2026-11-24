@@ -16,7 +16,7 @@ Past conversations live locally in agent.db. Their content is never automaticall
 
 Hypercubes are used **only for RAG**: deterministic bipolar passage signatures and Hamming similarity. This is an independent implementation. No Q-Manifold source, engine, training loop, checkpoint format or application code is included. GGUF inference uses llama.cpp.
 
-Voice input uses an installed Android recognizer, with offline preference; network use depends on that provider. Speech output needs an installed TTS voice. Inference and RAG are local. A foreground service keeps inference active while switching apps, subject to Android process limits. Chats and imported documents survive process death. Load the GGUF again to restore its saved instruction KV cache. New chats and subsequent prompts reuse the prefill whenever the rendered instruction prefix matches.
+Voice input uses an installed Android recognizer, with offline preference; network use depends on that provider. Speech output needs an installed TTS voice. Inference and RAG are local. A foreground service keeps inference active while switching apps, subject to Android process limits. Chats and imported documents survive process death. Reopening the app reloads the last selected GGUF and restores its saved instruction KV cache. Settings shows whether that cache is ready. New chats and subsequent prompts reuse the prefill whenever the rendered instruction prefix matches.
 
 ## Build
 
