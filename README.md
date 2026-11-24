@@ -8,15 +8,15 @@ Android GGUF chat app with model downloads and management, voice input/output, m
 2. In Models choose a catalog model, browse GitHub release assets, paste a direct HTTPS GGUF URL, or import a model. Load a single-file instruct GGUF that fits your phone's RAM.
 3. Enable and reorder individual System Instructions.
 4. Import UTF-8 documents or add text under Knowledge. Hypercube retrieval automatically supplies relevant passages based on the current conversation. The model can also request knowledge.search.
-5. Type or use Voice to fill the composer. Review then send. Speak last reads the reply; Settings enables automatic speech.
+5. Type a message or use Voice. Uncheck Auto-send voice to review a transcript before sending. Model reasoning streams in the Thinking card. Speak thinking defaults on and has its own checkbox. Speak last reads the last reply.
 
-The catalog includes Spark-X2.5 1.7B and 4B, Liquid LFM2.5, Qwen and SmolLM2. Each entry shows quantization and download size. Model cards open at the publisher. Download Manager reports actual byte progress and continues outside the app.
+The catalog includes Spark-X2.5 1.7B and 4B, Liquid LFM2.5, Qwen and SmolLM2. The last two entries are smaller SmolLM2 135M and 360M Q4_K_M builds for quick tests. Each entry shows quantization and download size. Model cards open at the publisher. Download Manager reports actual byte progress and continues outside the app.
 
 Past conversations live locally in agent.db. Their content is never automatically injected into other chats. The model must call conversations.search and then conversations.summary to obtain an extractive summary around a matching message. Tool requests and results appear in separate conversation cards.
 
 Hypercubes are used **only for RAG**: deterministic bipolar passage signatures and Hamming similarity. This is an independent implementation. No Q-Manifold source, engine, training loop, checkpoint format or application code is included. GGUF inference uses llama.cpp.
 
-Voice input uses an installed Android recognizer, with offline preference; network use depends on that provider. Speech output needs an installed TTS voice. Inference and RAG are local. A foreground service keeps inference active while switching apps, subject to Android process limits. Chats and imported documents survive process death; reload the GGUF afterwards.
+Voice input uses an installed Android recognizer, with offline preference; network use depends on that provider. Speech output needs an installed TTS voice. Inference and RAG are local. A foreground service keeps inference active while switching apps, subject to Android process limits. Chats and imported documents survive process death. Load the GGUF again to restore its saved instruction KV cache. New chats and subsequent prompts reuse the prefill whenever the rendered instruction prefix matches.
 
 ## Build
 
