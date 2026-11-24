@@ -35,9 +35,10 @@ final class SentenceStream {
     firstSentence=sentence;
     return;
    }
-   enqueue.accept(firstSentence);
+   enqueue.accept(firstSentence+" "+sentence);
    firstSentence=null;
    started=true;
+   return;
   }
   enqueue.accept(sentence);
  }
