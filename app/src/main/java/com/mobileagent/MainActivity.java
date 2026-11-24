@@ -15,12 +15,16 @@ import java.util.concurrent.*;
 
 public final class MainActivity extends Activity implements Agent.Listener {
  private static final int EXPORT_GGUF=13;
- private static final int MIN_VOICE_SPEED=50, MAX_VOICE_SPEED=200, DEFAULT_VOICE_SPEED=110;
+ private static final int MIN_VOICE_SPEED=50, MAX_VOICE_SPEED=200, DEFAULT_VOICE_SPEED=140;
  private static final int VOICE_SPEED_STEP=5;
  private static final String VOICE_SPEED="voiceSpeedPercent";
  private String queuedVoice, queuedChat;
  private String chatDraft="";
+ private static final String STARTER_PENDING="starterModelPending";
  private boolean restoreChecked;
+ private String starterStatus="";
+ private String countedModel="";
+ private TextView thinkingCount,replyCount;
  private TextView cacheStatus;
  private String cacheSystem;
  static final int BG=0xff10191e,CARD=0xff1b2930,ACCENT=0xff7be5c4,TEXT=0xffedf5f7,MUTED=0xffa9bbc3;
@@ -31,8 +35,12 @@ public final class MainActivity extends Activity implements Agent.Listener {
   if(Agent.busy)updateStatus();
   handler.postDelayed(this,250);
  }};
- final Runnable poll=new Runnable(){public void run(){if(resumed&&page.equals("Models"))render();if(resumed)handler.postDelayed(this,1500);}};
- public void onCreate(Bundle state){super.onCreate(state);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);settings=getSharedPreferences("settings",0);pendingExport=state==null?null:state.getString("pendingExport");queuedVoice=state==null?null:state.getString("queuedVoice");queuedChat=state==null?null:state.getString("queuedChat");models=new Models(this);if(Agent.store==null){Agent.store=new Store(this);Agent.memory=new CubeMemory(Agent.store);}chat=state==null?settings.getString("chat",null):state.getString("chat");if(chat==null||Agent.store.rows("SELECT id FROM chats WHERE id=?",chat).isEmpty())chat=Agent.store.newChat();tts=new TextToSpeech(this,result->handler.post(()->{
+ final Runnable poll=new Runnable(){public void run(){if(!resumed)return;
+  checkStarterModel();
+  if(page.equals("Models"))render();
+  else if(!Agent.busy)updateStatus();
+  handler.postDelayed(this,1500);}};
+ public void onCreate(Bundle state){super.onCreate(state);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);settings=getSharedPreferences("settings",0);pendingExport=state==null?null:state.getString("pendingExport");queuedVoice=state==null?null:state.getString("queuedVoice");queuedChat=state==null?null:state.getString("queuedChat");models=new Models(this);if(Agent.store==null){Agent.store=new Store(this);Agent.memory=new CubeMemory(Agent.store);}if(Agent.store.chats().isEmpty()&&!settings.contains("model"))settings.edit().putBoolean(STARTER_PENDING,true).apply();chat=state==null?settings.getString("chat",null):state.getString("chat");if(chat==null||Agent.store.rows("SELECT id FROM chats WHERE id=?",chat).isEmpty())chat=Agent.store.newChat();tts=new TextToSpeech(this,result->handler.post(()->{
   if(!isDestroyed()&&result==TextToSpeech.SUCCESS){
    tts.setSpeechRate(voiceSpeedPercent()/100f);
    ttsReady=true;
@@ -72,7 +80,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
   if(messages.isEmpty()){
    emptyChat=column();
    title(emptyChat,"Your models. Your assistant.");
-   label(emptyChat,"Download an instruct GGUF in Models. Add your knowledge and instructions, then type or speak. Conversations stay on this device.");
+   label(emptyChat,"Type or speak when your model is ready. You can manage downloads in Models.");
    body.addView(emptyChat);
   }
   for(String[] m:messages)messageCard(m[1],m[2]);
@@ -80,8 +88,11 @@ public final class MainActivity extends Activity implements Agent.Listener {
   body.addView(liveCards);
   thinkingCard=card(liveCards);
   thinkingStream=thinkingDetails(thinkingCard,"",true);
+  thinkingCount=tokenFooter(thinkingCard);
   replyCard=card(liveCards);
   stream=messageText(replyCard,"assistant","");
+  replyCount=tokenFooter(replyCard);
+  countedModel=Agent.loaded;
   updateStreams(chat.equals(Agent.activeChat)?Agent.live:"",chat.equals(Agent.activeChat)?Agent.liveThinking:"");
   LinearLayout controls=row();
   LinearLayout voice=row();
@@ -133,6 +144,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
   LinearLayout container=card(body);
   if(role.equals("reasoning"))thinkingDetails(container,value,false);
   else messageText(container,role,value);
+  showTokenCount(tokenFooter(container),value);
  }
  private TextView messageText(LinearLayout container,String role,String value){
   boolean tool=role.equals("tool");
@@ -144,20 +156,74 @@ public final class MainActivity extends Activity implements Agent.Listener {
   container.addView(content);
   return content;
  }
- TextView thinkingDetails(LinearLayout card,String value,boolean expanded){
+ private TextView tokenFooter(LinearLayout container){
+  TextView footer=text("",11,MUTED);
+  footer.setGravity(Gravity.END);
+  container.addView(footer);
+  return footer;
+ }
+ private void showTokenCount(TextView footer,String value){
+  int count=NativeModel.countTokens(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  footer.setText(count<0?"Token count unavailable":getResources().getQuantityString(
+    R.plurals.bubble_tokens,count,count));
+ }
+ TextView thinkingDetails(LinearLayout container,String value,boolean active){
+  GradientDrawable background=new GradientDrawable();
+  background.setColor(0xff162328);
+  background.setCornerRadius(dp(18));
+  background.setStroke(dp(1),0xff416967);
+  container.setBackground(background);
+  TextView heading=text(active?"Thinking…":"Thinking",12,ACCENT);
+  heading.setTypeface(null,Typeface.BOLD);
+  container.addView(heading);
   TextView details=text(value,13,MUTED);
   details.setTextIsSelectable(true);
-  details.setVisibility(expanded?View.VISIBLE:View.GONE);
-  card.addView(button("Thinking · show / hide",()->details.setVisibility(details.getVisibility()==View.GONE?View.VISIBLE:View.GONE)));
-  card.addView(details);
+  container.addView(details);
   return details;
  }
+ private void updateBubble(TextView content,TextView footer,String value){
+  if(android.text.TextUtils.equals(content.getText(),value))return;
+  content.setText(value);
+  if(!value.isEmpty())showTokenCount(footer,value);
+ }
  void updateStreams(String reply,String thinking){
-  if(thinkingCard.getVisibility()==View.GONE&&!thinking.isEmpty())thinkingStream.setVisibility(View.VISIBLE);
-  if(!android.text.TextUtils.equals(thinkingStream.getText(),thinking))thinkingStream.setText(thinking);
+  updateBubble(thinkingStream,thinkingCount,thinking);
   thinkingCard.setVisibility(thinking.isEmpty()?View.GONE:View.VISIBLE);
-  if(!android.text.TextUtils.equals(stream.getText(),reply))stream.setText(reply);
+  updateBubble(stream,replyCount,reply);
   replyCard.setVisibility(reply.isEmpty()?View.GONE:View.VISIBLE);
+ }
+ private void checkStarterModel(){
+  if(!settings.getBoolean(STARTER_PENDING,false)||Agent.busy)return;
+  if(settings.contains("model")||!Agent.loaded.isEmpty()){
+   finishStarterSetup();
+   return;
+  }
+  ModelCatalog.Entry starter=ModelCatalog.STARTER;
+  File file=new File(models.folder(),starter.file);
+  try{
+   for(String[] download:models.downloads()){
+    if(!starter.file.equals(download[1]))continue;
+    if(Integer.parseInt(download[5])!=DownloadManager.STATUS_SUCCESSFUL){
+     starterStatus="Spark 1.7B · "+download[2]+" · "+size(Long.parseLong(download[3]))+" / "+size(starter.bytes);
+     return;
+    }
+    break;
+   }
+   if(file.isFile()){
+    finishStarterSetup();
+    load(file);
+   }else{
+    models.download(starter.url());
+    starterStatus="Spark 1.7B · Download queued";
+   }
+  }catch(RuntimeException e){
+   finishStarterSetup();
+   starterStatus="Spark setup failed · "+e.getMessage();
+  }
+ }
+ private void finishStarterSetup(){
+  settings.edit().remove(STARTER_PENDING).apply();
+  starterStatus="";
  }
  private File lastModel(){
   String path=settings.getString("model","");
@@ -190,6 +256,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
   if(!settings.getBoolean("autoSendVoice",true)){queuedChat=null;queuedVoice=null;return false;}
   File model=lastModel();
   if(Agent.loaded.isEmpty()&&model==null){
+   if(settings.getBoolean(STARTER_PENDING,false))return false;
    List<File> available=models.files();
    if(available.size()==1)model=available.get(0);
    else{
@@ -230,7 +297,8 @@ public final class MainActivity extends Activity implements Agent.Listener {
    caption+=percent<0?"":" · "+percent+"%";
    caption+=Agent.tokensPerSecond>0?String.format(Locale.getDefault()," · %.1f tok/s",Agent.tokensPerSecond):"";
    caption+=String.format(Locale.getDefault()," · %.1fs",Math.max(0,SystemClock.elapsedRealtime()-Agent.phaseStarted)/1000.0);
-  }else if(Agent.loaded.isEmpty())caption+=" · No model loaded";
+  }else if(!starterStatus.isEmpty())caption=starterStatus;
+  else if(Agent.loaded.isEmpty())caption+=" · No model loaded";
   else if(!Agent.backend.isEmpty())caption+=" · "+Agent.backend;
   status.setText(caption);
   if(cacheStatus!=null){
@@ -250,6 +318,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
   updateStatus();
   if(!Agent.busy&&dispatchVoice())return;
   if(!page.equals("Chat"))return;
+  if(!Agent.busy&&!countedModel.equals(Agent.loaded)){render();return;}
   stopOrNew.setText(Agent.busy?"Stop":"New");
   if(!chat.equals(id))return;
   String latest=Agent.live;
@@ -258,13 +327,9 @@ public final class MainActivity extends Activity implements Agent.Listener {
    if(saved.size()>renderedMessages){
     if(emptyChat!=null){body.removeView(emptyChat);emptyChat=null;}
     body.removeView(liveCards);
-    boolean keepThinkingOpen=thinkingCard.getVisibility()==View.VISIBLE&&thinkingStream.getVisibility()==View.VISIBLE;
     for(int i=renderedMessages;i<saved.size();i++){
      String[] message=saved.get(i);
-     if(keepThinkingOpen&&message[1].equals("reasoning")){
-      thinkingDetails(card(body),message[2],true);
-      keepThinkingOpen=false;
-     }else messageCard(message[1],message[2]);
+     messageCard(message[1],message[2]);
     }
     body.addView(liveCards);
     renderedMessages=saved.size();
@@ -311,7 +376,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
   }
  }
  void drawModels(){title(body,"Models");label(body,"Use a single-file instruct GGUF sized for your phone. Downloads continue through Android Download Manager. Wi-Fi is recommended for large models.");body.addView(button("Browse GGUF model catalog",this::catalog));LinearLayout add=row();add.addView(button("Download URL",()->{EditText e=input("https://…/model.gguf","",false);new AlertDialog.Builder(this).setTitle("Download GGUF").setView(e).setPositiveButton("Download",(d,w)->{try{models.download(e.getText().toString());render();}catch(Exception x){error(x);}}).setNegativeButton("Cancel",null).show();}));add.addView(button("GitHub releases",this::github));add.addView(button("Import",()->pick(11,"*/*")));body.addView(add);
-  for(String[] d:models.downloads()){if(d[5].equals("8"))continue;LinearLayout c=card(body);c.addView(text(d[1],16,TEXT));label(c,d[2]+" · "+size(Long.parseLong(d[3]))+" / "+(Long.parseLong(d[4])>0?size(Long.parseLong(d[4])):"unknown size"));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);long total=Long.parseLong(d[4]),done=Long.parseLong(d[3]);p.setIndeterminate(total<=0);p.setMax(1000);if(total>0)p.setProgress((int)(1000.0*done/total));c.addView(p);c.addView(button(d[5].equals("16")?"Remove failed download":"Cancel download",()->{models.remove(Long.parseLong(d[0]));render();}));}
+  for(String[] d:models.downloads()){if(d[5].equals("8"))continue;LinearLayout c=card(body);c.addView(text(d[1],16,TEXT));label(c,d[2]+" · "+size(Long.parseLong(d[3]))+" / "+(Long.parseLong(d[4])>0?size(Long.parseLong(d[4])):"unknown size"));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);long total=Long.parseLong(d[4]),done=Long.parseLong(d[3]);p.setIndeterminate(total<=0);p.setMax(1000);if(total>0)p.setProgress((int)(1000.0*done/total));c.addView(p);c.addView(button(d[5].equals("16")?"Remove failed download":"Cancel download",()->{if(d[1].equals(ModelCatalog.STARTER.file))finishStarterSetup();models.remove(Long.parseLong(d[0]));render();}));}
   for(File f:models.files()){LinearLayout c=card(body);c.addView(text(f.getName(),16,TEXT));label(c,size(f.length())+(f.getName().equals(Agent.loaded)?" · Loaded":""));LinearLayout actions=row();actions.addView(button("Load",()->load(f)));actions.addView(button("Export GGUF",()->pickExport(f)));actions.addView(button("Delete",()->{if(Agent.busy)throw new IllegalStateException("Stop the current operation first.");confirm("Delete "+f.getName()+"?",()->{if(f.getName().equals(Agent.loaded)){AgentService.WORK.execute(()->NativeModel.unload());Agent.loaded="";Agent.instructionCache=null;}if(f.equals(lastModel()))settings.edit().remove("model").apply();boolean tracked=false;for(String[] d:models.downloads())if(d[1].equals(f.getName())){models.remove(Long.parseLong(d[0]));tracked=true;}if(!tracked)f.delete();render();});}));c.addView(actions);}
  }
  void catalog(){ScrollView sc=new ScrollView(this);LinearLayout list=column();list.setPadding(dp(12),dp(6),dp(12),dp(6));sc.addView(list);label(list,"Select a model to download. Size shown is disk size; inference also needs RAM for context and working memory.");for(ModelCatalog.Entry entry:ModelCatalog.ALL){LinearLayout c=card(list);c.addView(text(entry.name,16,TEXT));label(c,size(entry.bytes)+" · "+entry.note);LinearLayout actions=row();actions.addView(button("Download",()->new AlertDialog.Builder(this).setTitle(entry.name).setMessage("Download "+size(entry.bytes)+" from "+entry.repository+"? Check the publisher model card for its license.").setPositiveButton("Download",(d,w)->{try{models.download(entry.url());Toast.makeText(this,"Download started",Toast.LENGTH_SHORT).show();}catch(Exception e){error(e);}}).setNegativeButton("Cancel",null).show()));actions.addView(button("Publisher",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(entry.card())))));c.addView(actions);}new AlertDialog.Builder(this).setTitle("GGUF catalog").setView(sc).setPositiveButton("Done",(d,w)->render()).show();}
@@ -405,7 +470,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
     TextToSpeech.QUEUE_FLUSH,null,"voice-test-"+(++utteranceId));
   if(result==TextToSpeech.ERROR)error(new IllegalStateException("Android could not play the voice sample."));
  }
- void drawSettings(){title(body,"Settings");cacheSystem=Agent.store.instructions()+"\n"+Agent.TOOLS;cacheStatus=text("",14,MUTED);body.addView(cacheStatus);Switch speak=new Switch(this);speak.setText("Speak replies automatically");speak.setTextColor(TEXT);speak.setChecked(settings.getBoolean("speak",true));speak.setOnCheckedChangeListener((b,on)->{settings.edit().putBoolean("speak",on).apply();if(!on)silence();});body.addView(speak);drawVoiceSpeed();label(body,"Voice input uses the installed Android speech recognizer and requests offline recognition. Availability and network use depend on your speech provider. Voice output uses Android text-to-speech.");body.addView(button("Android voice settings",()->startActivity(new Intent("com.android.settings.TTS_SETTINGS"))));title(body,"Generation");label(body,"Thinking: "+settings.getInt("thinkingTokens",0)+" tokens. Off gives direct answers; Short caps reasoning at 128 tokens. Changes apply on the next message.");for(int n:new int[]{0,128,256})body.addView(button(n==0?"Thinking off (default)":"Thinking · "+n+" tokens",()->{settings.edit().putInt("thinkingTokens",n).apply();render();}));label(body,"Answer length: "+settings.getInt("answerTokens",1536)+" tokens, separate from the thinking allowance. Older turns are trimmed to reserve output space; the current question is kept.");for(int n:new int[]{768,1536,3072})body.addView(button(n+" answer tokens",()->{settings.edit().putInt("answerTokens",n).apply();render();}));title(body,"Acceleration");
+ void drawSettings(){title(body,"Settings");cacheSystem=Agent.store.instructions()+"\n"+Agent.TOOLS;cacheStatus=text("",14,MUTED);body.addView(cacheStatus);Switch speak=new Switch(this);speak.setText("Speak replies automatically");speak.setTextColor(TEXT);speak.setChecked(settings.getBoolean("speak",true));speak.setOnCheckedChangeListener((b,on)->{settings.edit().putBoolean("speak",on).apply();if(!on)silence();});body.addView(speak);drawVoiceSpeed();label(body,"Voice input uses the installed Android speech recognizer and requests offline recognition. Availability and network use depend on your speech provider. Voice output uses Android text-to-speech.");body.addView(button("Android voice settings",()->startActivity(new Intent("com.android.settings.TTS_SETTINGS"))));title(body,"Generation");label(body,"Thinking: "+settings.getInt("thinkingTokens",Agent.DEFAULT_THINKING_TOKENS)+" tokens. Off gives direct answers; Short caps reasoning at 128 tokens. Changes apply on the next message.");for(int n:new int[]{0,128,256})body.addView(button(n==0?"Thinking off":"Thinking · "+n+" tokens",()->{settings.edit().putInt("thinkingTokens",n).apply();render();}));label(body,"Answer length: "+settings.getInt("answerTokens",1536)+" tokens, separate from the thinking allowance. Older turns are trimmed to reserve output space; the current question is kept.");for(int n:new int[]{768,1536,3072})body.addView(button(n+" answer tokens",()->{settings.edit().putInt("answerTokens",n).apply();render();}));title(body,"Acceleration");
   Switch gpu=new Switch(this);
   gpu.setText("Use Vulkan when supported");
   gpu.setTextColor(TEXT);
@@ -413,7 +478,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
   gpu.setOnCheckedChangeListener((button,enabled)->settings.edit().putBoolean("gpu",enabled).apply());
   body.addView(gpu);
   label(body,"Reload your model to apply this setting.");
-  title(body,"Model context");label(body,"Current: "+settings.getInt("context",4096)+" tokens. Reload the model after changing this. Larger contexts use more RAM.");for(int n:new int[]{2048,4096,8192,16384,32768})body.addView(button(n+" tokens",()->{settings.edit().putInt("context",n).apply();render();}));label(body,"All model inference, knowledge retrieval and chat storage run locally. Downloads contact the URL you choose. Release 1.0.0 · llama.cpp + hypercube RAG.");}
+  title(body,"Model context");label(body,"Current: "+settings.getInt("context",4096)+" tokens. Reload the model after changing this. Larger contexts use more RAM.");for(int n:new int[]{2048,4096,8192,16384,32768})body.addView(button(n+" tokens",()->{settings.edit().putInt("context",n).apply();render();}));label(body,"All model inference, knowledge retrieval and chat storage run locally. The first launch downloads Spark 1.7B. You can choose other models in Models. Release 1.0.0 · llama.cpp + hypercube RAG.");}
  protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);
  if(request==EXPORT_GGUF){
   String name=pendingExport;

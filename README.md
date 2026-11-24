@@ -5,7 +5,7 @@ Android GGUF chat app with model downloads and management, voice input/output, m
 ## Use
 
 1. Install the APK from Releases. Android 8+, ARM64 or x86_64. No weights are bundled.
-2. In Models choose a catalog model, browse GitHub release assets, paste a direct HTTPS GGUF URL, or import a model. Load a single-file instruct GGUF that fits your phone's RAM.
+2. On first launch, the app downloads and loads Spark-X2.5 1.7B Q4_K_M. In Models you can choose another catalog model, browse GitHub release assets, paste a direct HTTPS GGUF URL, or import a model.
 3. Enable and reorder individual System Instructions.
 4. Import UTF-8 documents or add text under Knowledge. Hypercube retrieval automatically supplies relevant passages based on the current conversation. The model can also request knowledge.search.
 5. Type a message or use Voice. Uncheck Auto-send voice to review a transcript before sending. Model reasoning streams in the Thinking card. Speak thinking defaults on and has its own checkbox. Speak last reads the last reply.

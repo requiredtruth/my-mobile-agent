@@ -32,7 +32,7 @@ public final class AgentService extends Service {
      }
      if(!Agent.stopped){
       Agent.answerTokens=settings.getInt("answerTokens",1536);
-      Agent.thinkingTokens=settings.getInt("thinkingTokens",0);
+      Agent.thinkingTokens=settings.getInt("thinkingTokens",Agent.DEFAULT_THINKING_TOKENS);
       Agent.run(chat,question);
      }else Agent.stage("Stopped");
     }
@@ -61,7 +61,7 @@ public final class AgentService extends Service {
   Agent.loaded=file.getName();
   settings.edit().putString("model",file.getAbsolutePath()).apply();
   Agent.instructionCache=new InstructionCache(this,file,Agent.backend,context);
-  if(warm)Agent.preparePrefix(Agent.store.instructions()+"\n"+Agent.TOOLS,settings.getInt("thinkingTokens",0)>0,true);
+  if(warm)Agent.preparePrefix(Agent.store.instructions()+"\n"+Agent.TOOLS,settings.getInt("thinkingTokens",Agent.DEFAULT_THINKING_TOKENS)>0,true);
  }
  public void onTimeout(int startId,int fgsType){Agent.stopped=true;NativeModel.stop();stopSelf();}
  public IBinder onBind(Intent i){return null;}

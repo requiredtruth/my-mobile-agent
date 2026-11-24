@@ -1,5 +1,5 @@
 package com.mobileagent;
-/** Publisher GGUF files verified when catalog was assembled. Weights download only on user request. */
+/** Publisher GGUF files verified when the catalog was assembled. */
 public final class ModelCatalog {
  public static final class Entry {
   public final String name,repository,revision,file,note;public final long bytes;
@@ -7,8 +7,9 @@ public final class ModelCatalog {
   public String url(){return "https://huggingface.co/"+repository+"/resolve/"+revision+"/"+file;}
   public String card(){return "https://huggingface.co/"+repository;}
  }
+ public static final Entry STARTER=new Entry("Spark-X2.5 1.7B · Q4_K_M","XHToken/Spark-X2.5-1.7B-GGUF","1f7fa33b1245c14730da39e125714ad3a327901b","Spark-X2.5-1.7B-Q4_K_M.gguf",1107457856L,"Compact Spark; start with 2K–4K context.");
  public static final Entry[] ALL={
-  new Entry("Spark-X2.5 1.7B · Q4_K_M","XHToken/Spark-X2.5-1.7B-GGUF","1f7fa33b1245c14730da39e125714ad3a327901b","Spark-X2.5-1.7B-Q4_K_M.gguf",1107457856L,"Compact Spark; start with 2K–4K context."),
+  STARTER,
   new Entry("Spark-X2.5 4B · Q4_K_M","XHToken/Spark-X2.5-4B-GGUF","9826e0be84e6e6e8b9668abc91421109a1df1e2d","Spark-X2.5-4B-Q4_K_M.gguf",2600224352L,"Larger Spark model; requires more free RAM than the download size."),
   new Entry("LFM2.5 1.2B Instruct · Q4_K_M","LiquidAI/LFM2.5-1.2B-Instruct-GGUF","8ed288026e23958ad9dfa92d53ed773a8eee7125","LFM2.5-1.2B-Instruct-Q4_K_M.gguf",730895168L,"Compact instruction model."),
   new Entry("LFM2.5 1.2B Thinking · Q4_K_M","LiquidAI/LFM2.5-1.2B-Thinking-GGUF","b71945805f7d4d87dabd73e26098d44bcad6c35f","LFM2.5-1.2B-Thinking-Q4_K_M.gguf",730899072L,"Reasoning model; may spend response tokens on thinking."),

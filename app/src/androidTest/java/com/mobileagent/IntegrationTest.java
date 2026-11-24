@@ -48,7 +48,10 @@ public class IntegrationTest {
  }
  @Test public void realGgufNativeInference()throws Exception{
   File model=new File(context.getFilesDir(),"smoke.gguf");try(InputStream in=InstrumentationRegistry.getInstrumentation().getContext().getAssets().open("smoke.gguf");OutputStream out=new FileOutputStream(model)){byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);}
-  Models.validate(model);NativeModel.load(model.getAbsolutePath(),2048,2);byte[][] last={null};List<Integer> prefill=new ArrayList<>();byte[] result=NativeModel.generate("[{\"role\":\"system\",\"content\":\"Tell stories.\"},{\"role\":\"user\",\"content\":\"Once upon a time, a little cat\"}]","[]",256,0,false,b->{
+  Models.validate(model);NativeModel.load(model.getAbsolutePath(),2048,2);
+  assertEquals(0,NativeModel.countTokens(new byte[0]));
+  assertTrue(NativeModel.countTokens("Once upon a time".getBytes(StandardCharsets.UTF_8))>0);
+  byte[][] last={null};List<Integer> prefill=new ArrayList<>();byte[] result=NativeModel.generate("[{\"role\":\"system\",\"content\":\"Tell stories.\"},{\"role\":\"user\",\"content\":\"Once upon a time, a little cat\"}]","[]",256,0,false,b->{
    last[0]=b;
    try{
     JSONObject update=new JSONObject(new String(b,StandardCharsets.UTF_8));
@@ -86,7 +89,9 @@ public class IntegrationTest {
   history.put(Protocol.message("user","Once upon a time, a little cat"));
   JSONObject trimmed=new JSONObject(new String(NativeModel.generate(history.toString(),"[]",256,0,false,b->{}),StandardCharsets.UTF_8));assertTrue(trimmed.getInt("trimmed_turns")>0);assertFalse(trimmed.optString("content").isEmpty());
   JSONObject stopped=new JSONObject(new String(NativeModel.generate("[{\"role\":\"user\",\"content\":\"Once upon a time\"}]","[]",256,0,false,b->NativeModel.stop()),StandardCharsets.UTF_8));assertEquals("stopped",stopped.getString("finish_reason"));
-  NativeModel.unload();model.delete();
+  NativeModel.unload();
+  assertEquals(-1,NativeModel.countTokens("Hello".getBytes(StandardCharsets.UTF_8)));
+  model.delete();
  }
  private static int cachedTokens(byte[] update){
   try{return new JSONObject(new String(update,StandardCharsets.UTF_8)).optInt("cached_tokens");}

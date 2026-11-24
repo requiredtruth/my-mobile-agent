@@ -1,0 +1,6 @@
+<resources>
+    <plurals name="bubble_tokens">
+        <item quantity="one">%d token</item>
+        <item quantity="other">%d tokens</item>
+    </plurals>
+</resources>

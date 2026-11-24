@@ -7,6 +7,7 @@
 #include <codecvt>
 #include <locale>
 #include <memory>
+#include <mutex>
 #include <algorithm>
 #include "llama.h"
 #include "common.h"
@@ -16,6 +17,8 @@
 #include <cstdio>
 #include <unistd.h>
 static llama_model * model=nullptr;
+static std::mutex token_vocab_mutex;
+static const llama_vocab* token_vocab=nullptr;
 static llama_context * ctx=nullptr;
 static common_chat_templates_ptr templates;
 static std::atomic<bool> cancelled{false};
@@ -28,7 +31,21 @@ static void fail(JNIEnv* e,const std::string& s){e->ThrowNew(e->FindClass("java/
 static jbyteArray bytes(JNIEnv* e,const std::string& s){auto a=e->NewByteArray(s.size());e->SetByteArrayRegion(a,0,s.size(),(const jbyte*)s.data());return a;}
 static std::vector<llama_token> tokenize(const llama_vocab* vocab,const std::string& text,bool special){int n=llama_tokenize(vocab,text.data(),text.size(),nullptr,0,special,true);if(n<0)n=-n;std::vector<llama_token> out(n);n=llama_tokenize(vocab,text.data(),text.size(),out.data(),out.size(),special,true);if(n<0)throw std::runtime_error("Tokenization failed");out.resize(n);return out;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_stop(JNIEnv*,jclass){cancelled=true;}
-extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){templates.reset();prefix_file.clear();prefix_tokens.clear();prefix_saved=false;resident_prefix=0;if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
+extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){{
+ std::lock_guard<std::mutex> lock(token_vocab_mutex);
+ token_vocab=nullptr;
+ }templates.reset();prefix_file.clear();prefix_tokens.clear();prefix_saved=false;resident_prefix=0;if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
+extern "C" JNIEXPORT jint JNICALL Java_com_mobileagent_NativeModel_countTokens(JNIEnv* e,jclass,jbyteArray utf8){
+ const auto length=e->GetArrayLength(utf8);
+ std::string text(length,'\0');
+ e->GetByteArrayRegion(utf8,0,length,reinterpret_cast<jbyte*>(text.data()));
+ if(e->ExceptionCheck())return -1;
+ std::lock_guard<std::mutex> lock(token_vocab_mutex);
+ if(!token_vocab)return -1;
+ if(length==0)return 0;
+ const int count=llama_tokenize(token_vocab,text.data(),length,nullptr,0,false,false);
+ return count<0?-count:count;
+}
 extern "C" JNIEXPORT jstring JNICALL Java_com_mobileagent_NativeModel_loadBackend(
  JNIEnv* e,jclass c,jstring path,jint context,jint threads,jboolean preferGpu){
  Java_com_mobileagent_NativeModel_unload(e,c);
@@ -83,6 +100,10 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_mobileagent_NativeModel_loadBacken
   Java_com_mobileagent_NativeModel_unload(e,c);
   fail(e,std::string("Chat template error: ")+ex.what());
   return nullptr;
+ }
+ {
+  std::lock_guard<std::mutex> lock(token_vocab_mutex);
+  token_vocab=llama_model_get_vocab(model);
  }
  return e->NewStringUTF(usingGpu?"Vulkan + CPU":"CPU");
 }

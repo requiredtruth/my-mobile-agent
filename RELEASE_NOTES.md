@@ -1,4 +1,8 @@
-- Settings lets you choose a voice speed from 0.50× to 2.00× and hear it with Test voice. The app saves your selection and starts at 1.10× by default.
+- Thinking streams in a distinct, always-open bubble. Each bubble shows its text token count using the loaded model.
+- Thinking defaults to a 128-token budget.
+- Fresh installs download and load Spark-X2.5 1.7B Q4_K_M automatically.
+
+- Settings lets you choose a voice speed from 0.50× to 2.00× and hear it with Test voice. The app saves your selection and starts at 1.40× by default.
 - Automatic playback starts with two sentences in one utterance, and Speak last reads the saved reply continuously.
 - Replies already visible or playing stay in the chat when model output switches to an incomplete tool request. Valid tool calls and results still appear separately.
 - Auto-send voice submits after restoring the last model or selecting a model on first use.
