@@ -1,3 +1,5 @@
+- Speech plays at 1.10× Android’s normal rate. Automatic playback starts with two sentences in one utterance, and Speak last reads the saved reply continuously.
+- Replies already visible or playing stay in the chat when model output switches to an incomplete tool request. Valid tool calls and results still appear separately.
 - Auto-send voice submits after restoring the last model or selecting a model on first use.
 - Auto-send voice and Speak thinking appear side by side.
 - Settings shows whether the instruction KV cache is ready. The cache is stored in persistent private app storage and restored when reopening the app.
