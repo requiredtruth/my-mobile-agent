@@ -22,7 +22,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
  private String cacheSystem;
  static final int BG=0xff10191e,CARD=0xff1b2930,ACCENT=0xff7be5c4,TEXT=0xffedf5f7,MUTED=0xffa9bbc3;
  final Handler handler=new Handler(Looper.getMainLooper());final ExecutorService io=Executors.newSingleThreadExecutor();
- LinearLayout root,body,liveCards,thinkingCard;TextView status,stream,thinkingStream;ProgressBar progress;Button stopOrNew;int renderedMessages;ScrollView scroll;EditText composer;Models models;String page="Chat",chat,pendingExport;TextToSpeech tts;boolean ttsReady=false,resumed=false;long speechRound=-1,utteranceId=0;boolean mutedReply=false;SentenceStream sentences=new SentenceStream(),thinkingSentences=new SentenceStream();android.content.SharedPreferences settings;
+ LinearLayout root,body,liveCards,thinkingCard,replyCard,emptyChat;TextView status,stream,thinkingStream;ProgressBar progress;Button stopOrNew;int renderedMessages;ScrollView scroll;EditText composer;Models models;String page="Chat",chat,pendingExport;TextToSpeech tts;boolean ttsReady=false,resumed=false;long speechRound=-1,utteranceId=0;boolean mutedReply=false;SentenceStream sentences=new SentenceStream(),thinkingSentences=new SentenceStream();android.content.SharedPreferences settings;
  final Runnable statusTick=new Runnable(){public void run(){
   if(!resumed)return;
   if(Agent.busy)updateStatus();
@@ -58,14 +58,22 @@ public final class MainActivity extends Activity implements Agent.Listener {
   if(!page.equals("Chat"))scroll.post(()->scroll.scrollTo(0,previousScroll));
  }
  void drawChat(String draft){
-  List<String[]> messages=Agent.store.messages(chat);renderedMessages=messages.size();if(messages.isEmpty()){title(body,"Your models. Your assistant.");label(body,"Download an instruct GGUF in Models. Add your knowledge and instructions, then type or speak. Conversations stay on this device.");}
+  List<String[]> messages=Agent.store.messages(chat);
+  renderedMessages=messages.size();
+  emptyChat=null;
+  if(messages.isEmpty()){
+   emptyChat=column();
+   title(emptyChat,"Your models. Your assistant.");
+   label(emptyChat,"Download an instruct GGUF in Models. Add your knowledge and instructions, then type or speak. Conversations stay on this device.");
+   body.addView(emptyChat);
+  }
   for(String[] m:messages)messageCard(m[1],m[2]);
   liveCards=column();
   body.addView(liveCards);
   thinkingCard=card(liveCards);
   thinkingStream=thinkingDetails(thinkingCard,"",true);
-  stream=text("",16,TEXT);
-  liveCards.addView(stream);
+  replyCard=card(liveCards);
+  stream=messageText(replyCard,"assistant","");
   updateStreams(chat.equals(Agent.activeChat)?Agent.live:"",chat.equals(Agent.activeChat)?Agent.liveThinking:"");
   LinearLayout controls=row();
   LinearLayout voice=row();
@@ -94,14 +102,40 @@ public final class MainActivity extends Activity implements Agent.Listener {
   controls.addView(button("Silence",this::silence));
   root.addView(controls);
   LinearLayout compose=row();composer=input("Message your local agent",draft,true);composer.setMaxLines(5);compose.addView(composer,new LinearLayout.LayoutParams(0,-2,1));compose.addView(button("Send",this::send));root.addView(compose);
+  status.setLines(2);
   root.addView(status);
   progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
   progress.setContentDescription("Current phase progress");
   progress.setMax(100);
   root.addView(progress,new LinearLayout.LayoutParams(-1,dp(5)));
-  scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
+  followChatBottom(scroll,body);
  }
- void messageCard(String role,String value){LinearLayout c=card(body);if(role.equals("reasoning")){thinkingDetails(c,value,false);return;}TextView who=text(role.equals("tool")?"TOOL · local execution":role.equals("user")?"YOU":role.equals("error")?"ERROR":"ASSISTANT",11,role.equals("tool")?ACCENT:MUTED);c.addView(who);TextView t=text(value,role.equals("tool")?13:16,TEXT);t.setTextIsSelectable(true);if(role.equals("tool"))t.setTypeface(Typeface.MONOSPACE);c.addView(t);}
+ private void followChatBottom(ScrollView viewport,LinearLayout messages){
+  Runnable bottom=()->{
+   if(scroll==viewport)viewport.scrollTo(0,Math.max(0,messages.getHeight()-viewport.getHeight()));
+  };
+  messages.addOnLayoutChangeListener((view,left,top,right,bottomEdge,oldLeft,oldTop,oldRight,oldBottom)->{
+   if(bottomEdge-top>oldBottom-oldTop)viewport.post(bottom);
+  });
+  viewport.addOnLayoutChangeListener((view,left,top,right,bottomEdge,oldLeft,oldTop,oldRight,oldBottom)->{
+   if(bottomEdge-top!=oldBottom-oldTop)viewport.post(bottom);
+  });
+ }
+ void messageCard(String role,String value){
+  LinearLayout container=card(body);
+  if(role.equals("reasoning"))thinkingDetails(container,value,false);
+  else messageText(container,role,value);
+ }
+ private TextView messageText(LinearLayout container,String role,String value){
+  boolean tool=role.equals("tool");
+  String title=tool?"TOOL · local execution":role.equals("user")?"YOU":role.equals("error")?"ERROR":"ASSISTANT";
+  container.addView(text(title,11,tool?ACCENT:MUTED));
+  TextView content=text(value,tool?13:16,TEXT);
+  content.setTextIsSelectable(true);
+  if(tool)content.setTypeface(Typeface.MONOSPACE);
+  container.addView(content);
+  return content;
+ }
  TextView thinkingDetails(LinearLayout card,String value,boolean expanded){
   TextView details=text(value,13,MUTED);
   details.setTextIsSelectable(true);
@@ -112,10 +146,10 @@ public final class MainActivity extends Activity implements Agent.Listener {
  }
  void updateStreams(String reply,String thinking){
   if(thinkingCard.getVisibility()==View.GONE&&!thinking.isEmpty())thinkingStream.setVisibility(View.VISIBLE);
-  thinkingStream.setText(thinking);
+  if(!android.text.TextUtils.equals(thinkingStream.getText(),thinking))thinkingStream.setText(thinking);
   thinkingCard.setVisibility(thinking.isEmpty()?View.GONE:View.VISIBLE);
-  stream.setText(reply);
-  stream.setVisibility(reply.isEmpty()?View.GONE:View.VISIBLE);
+  if(!android.text.TextUtils.equals(stream.getText(),reply))stream.setText(reply);
+  replyCard.setVisibility(reply.isEmpty()?View.GONE:View.VISIBLE);
  }
  private File lastModel(){
   String path=settings.getString("model","");
@@ -198,7 +232,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
      :"Instruction KV cache · Not ready");
   }
   if(progress!=null){
-   progress.setVisibility(Agent.busy?View.VISIBLE:View.GONE);
+   progress.setVisibility(Agent.busy?View.VISIBLE:View.INVISIBLE);
    progress.setIndeterminate(percent<0);
    if(percent>=0)progress.setProgress(percent);
   }
@@ -214,14 +248,21 @@ public final class MainActivity extends Activity implements Agent.Listener {
   if(latest.isEmpty()&&Agent.liveThinking.isEmpty()){
    List<String[]> saved=Agent.store.messages(chat);
    if(saved.size()>renderedMessages){
+    if(emptyChat!=null){body.removeView(emptyChat);emptyChat=null;}
     body.removeView(liveCards);
-    for(int i=renderedMessages;i<saved.size();i++)messageCard(saved.get(i)[1],saved.get(i)[2]);
+    boolean keepThinkingOpen=thinkingCard.getVisibility()==View.VISIBLE&&thinkingStream.getVisibility()==View.VISIBLE;
+    for(int i=renderedMessages;i<saved.size();i++){
+     String[] message=saved.get(i);
+     if(keepThinkingOpen&&message[1].equals("reasoning")){
+      thinkingDetails(card(body),message[2],true);
+      keepThinkingOpen=false;
+     }else messageCard(message[1],message[2]);
+    }
     body.addView(liveCards);
     renderedMessages=saved.size();
    }
   }
   updateStreams(latest,Agent.liveThinking);
-  scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
  });}
  public void speech(String id,long round,String text,boolean finished){
   streamSpeech(id,round,text,finished,false);

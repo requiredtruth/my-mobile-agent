@@ -1,3 +1,4 @@
 - Auto-send voice submits after restoring the last model or selecting a model on first use.
 - Auto-send voice and Speak thinking appear side by side.
 - Settings shows whether the instruction KV cache is ready. The cache is stored in persistent private app storage and restored when reopening the app.
+- Replies stream inside the Assistant card. Chat follows new lines without refocusing the scroll view on every token.

@@ -108,11 +108,10 @@ public final class Agent {
     }),StandardCharsets.UTF_8));
    requireTool=false;
    if(!stopped)stage("Processing model output");
-   String reply=Protocol.answer(generated.optString("content"));live="";
+   String reply=Protocol.answer(generated.optString("content"));
    String reasoning=generated.optString("reasoning_content").trim();
    speakThinking(chat,reasoning,true);
    if(!reasoning.isEmpty())store.message(chat,"reasoning",reasoning);
-   liveThinking="";
    if(stopped){if(!reply.isEmpty())store.message(chat,"assistant",reply+"\n[Stopped]");break;}
    String finish=generated.optString("finish_reason");JSONArray requests=generated.optJSONArray("tool_calls");
    JSONObject fallback=call(reply);
@@ -129,6 +128,7 @@ public final class Agent {
     if(!repaired){repaired=true;messages.getJSONObject(0).put("content",messages.getJSONObject(0).getString("content")+"\nThe tool request was incomplete or the tool limit was reached. Give a concise final answer now.");continue;}
     store.message(chat,"error","The model did not finish a valid tool request. No incomplete request was executed.");break;
    }
+   live="";liveThinking="";
    // Native requests are preserved with IDs, and results use the actual tool role in the model template.
    JSONObject assistant=Protocol.message("assistant",reply);assistant.put("tool_calls",requests);messages.put(assistant);
    for(int i=0;i<requests.length();i++){
