@@ -20,7 +20,7 @@ public final class AgentService extends Service {
    try{
     SharedPreferences settings=getSharedPreferences("settings",0);
     if("load".equals(action)){
-     load(new File(i.getStringExtra("path")),settings);
+     load(new File(i.getStringExtra("path")),settings,true);
      Agent.stage(Agent.stopped?"Stopped":"Ready");
     }else{
      String question=i.getStringExtra("question");
@@ -28,7 +28,7 @@ public final class AgentService extends Service {
      if(Agent.loaded.isEmpty()){
       String path=i.getStringExtra("path");
       if(path==null)path=settings.getString("model","");
-      load(new File(path),settings);
+      load(new File(path),settings,false);
      }
      if(!Agent.stopped){
       Agent.answerTokens=settings.getInt("answerTokens",1536);
@@ -49,7 +49,7 @@ public final class AgentService extends Service {
   });
   return START_NOT_STICKY;
  }
- private void load(File file,SharedPreferences settings)throws Exception{
+ private void load(File file,SharedPreferences settings,boolean warm)throws Exception{
   Models.validate(file);
   Agent.loaded="";
   Agent.instructionCache=null;
@@ -61,7 +61,7 @@ public final class AgentService extends Service {
   Agent.loaded=file.getName();
   settings.edit().putString("model",file.getAbsolutePath()).apply();
   Agent.instructionCache=new InstructionCache(this,file,Agent.backend,context);
-  Agent.preparePrefix(Agent.store.instructions()+"\n"+Agent.TOOLS,settings.getInt("thinkingTokens",0)>0);
+  if(warm)Agent.preparePrefix(Agent.store.instructions()+"\n"+Agent.TOOLS,settings.getInt("thinkingTokens",0)>0,true);
  }
  public void onTimeout(int startId,int fgsType){Agent.stopped=true;NativeModel.stop();stopSelf();}
  public IBinder onBind(Intent i){return null;}

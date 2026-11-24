@@ -34,9 +34,9 @@ public final class Agent {
   Listener l=listener;
   if(l!=null&&!stopped&&!text.isEmpty())l.thinkingSpeech(chat,generationRound,text,finished);
  }
- static void preparePrefix(String system,boolean thinking)throws JSONException{
+ static void preparePrefix(String system,boolean thinking,boolean warm)throws JSONException{
   if(instructionCache==null||stopped)return;
-  instructionCache.prepare(system,Protocol.tools().toString(),thinking,b->{
+  instructionCache.prepare(system,Protocol.tools().toString(),thinking,warm,b->{
    try{
     JSONObject update=new JSONObject(new String(b,StandardCharsets.UTF_8));
     int cached=update.optInt("cached_tokens");
@@ -58,7 +58,7 @@ public final class Agent {
  public static void run(String chat,String question){activeChat=chat;live="";liveThinking="";try{
   if(loaded.isEmpty())throw new IllegalStateException("Download or import a GGUF, then tap Load in Models.");
   String system=store.instructions()+"\n"+TOOLS;
-  preparePrefix(system,thinkingTokens>0);
+  preparePrefix(system,thinkingTokens>0,false);
   JSONArray messages=new JSONArray().put(Protocol.message("system",system));
   List<String[]> msgs=store.messages(chat);int start=Math.max(0,msgs.size()-24);while(start<msgs.size()&&!msgs.get(start)[1].equals("user"))start++;
   for(int i=start;i<msgs.size();i++){String[] m=msgs.get(i);if(m[1].equals("user")||m[1].equals("assistant"))messages.put(Protocol.message(m[1],Protocol.answer(m[2])));}
@@ -76,7 +76,7 @@ public final class Agent {
    long[] last={-100};
    boolean[] decoding={false};
    JSONObject generated=new JSONObject(new String(generator.generate(messages.toString(),
-    finalOnly?"[]":Protocol.tools().toString(),answerTokens,repaired||finalOnly?0:thinkingTokens,
+    Protocol.tools().toString(),answerTokens,repaired||finalOnly?0:thinkingTokens,
     requireTool&&!finalOnly,b->{
      long now=SystemClock.elapsedRealtime();
      if(stopped||decoding[0]&&now-last[0]<75)return;
@@ -87,9 +87,10 @@ public final class Agent {
        int count=partial.optInt("prompt_tokens"),total=partial.optInt("prompt_total");
        long elapsed=partial.optLong("elapsed_ms");
        int cached=partial.optInt("cached_tokens");
+       if(instructionCache!=null&&partial.has("cache_ready"))instructionCache.markReady(partial.optBoolean("cache_ready"));
        String phase=count==total?"Prefill done · starting generation":"Prefill";
        if(cached>0)phase+=" · "+cached+" cached";
-       progress(phase,count,total,"tokens",elapsed>0?(count-cached)*1000.0/elapsed:0);
+       progress(phase,count-cached,total-cached,"new tokens",elapsed>0?(count-cached)*1000.0/elapsed:0);
        return;
       }
       decoding[0]=true;

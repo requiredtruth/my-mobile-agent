@@ -13,6 +13,7 @@ final class InstructionCache {
  private final SharedPreferences settings;
  private final String identity;
  private final String backend;
+ private String preparedStamp="";
  final File file;
 
  InstructionCache(Context context,File model,String backend,int tokens){
@@ -25,12 +26,16 @@ final class InstructionCache {
   if(!file.exists()&&previous.isFile())previous.renameTo(file);
  }
 
- boolean prepare(String system,String tools,boolean thinking,NativeModel.Tokens progress){
-  boolean ready=NativeModel.preparePrefix(file.getPath(),system,tools,thinking,progress);
+ void prepare(String system,String tools,boolean thinking,boolean warm,NativeModel.Tokens progress){
+  preparedStamp=stamp(identity,system,thinking);
+  markReady(NativeModel.preparePrefix(file.getPath(),system,tools,thinking,warm,progress));
+ }
+
+ void markReady(boolean ready){
+  String stamp=ready?preparedStamp:"";
+  if(file.getName().equals(settings.getString("cacheFile",""))&&stamp.equals(settings.getString("cacheStamp","")))return;
   settings.edit().putString("cacheBackend",backend)
-    .putString("cacheFile",file.getName())
-    .putString("cacheStamp",ready?stamp(identity,system,thinking):"").apply();
-  return ready;
+    .putString("cacheFile",file.getName()).putString("cacheStamp",stamp).apply();
  }
 
  static boolean ready(Context context,SharedPreferences settings,String system){

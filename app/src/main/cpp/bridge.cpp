@@ -20,14 +20,15 @@ static llama_context * ctx=nullptr;
 static common_chat_templates_ptr templates;
 static std::atomic<bool> cancelled{false};
 static std::string prefix_file, prefix_system, prefix_tools;
-static bool prefix_thinking=false;
+static bool prefix_thinking=false, prefix_saved=false;
+static size_t resident_prefix=0;
 static std::vector<llama_token> prefix_tokens;
 static std::string str(JNIEnv* e,jstring s){const jchar* p=e->GetStringChars(s,nullptr);std::u16string v((const char16_t*)p,e->GetStringLength(s));e->ReleaseStringChars(s,p);return std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t>{}.to_bytes(v);}
 static void fail(JNIEnv* e,const std::string& s){e->ThrowNew(e->FindClass("java/lang/IllegalStateException"),s.c_str());}
 static jbyteArray bytes(JNIEnv* e,const std::string& s){auto a=e->NewByteArray(s.size());e->SetByteArrayRegion(a,0,s.size(),(const jbyte*)s.data());return a;}
 static std::vector<llama_token> tokenize(const llama_vocab* vocab,const std::string& text,bool special){int n=llama_tokenize(vocab,text.data(),text.size(),nullptr,0,special,true);if(n<0)n=-n;std::vector<llama_token> out(n);n=llama_tokenize(vocab,text.data(),text.size(),out.data(),out.size(),special,true);if(n<0)throw std::runtime_error("Tokenization failed");out.resize(n);return out;}
 extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_stop(JNIEnv*,jclass){cancelled=true;}
-extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){templates.reset();prefix_file.clear();prefix_tokens.clear();if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
+extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_unload(JNIEnv*,jclass){templates.reset();prefix_file.clear();prefix_tokens.clear();prefix_saved=false;resident_prefix=0;if(ctx)llama_free(ctx);if(model)llama_model_free(model);ctx=nullptr;model=nullptr;}
 extern "C" JNIEXPORT jstring JNICALL Java_com_mobileagent_NativeModel_loadBackend(
  JNIEnv* e,jclass c,jstring path,jint context,jint threads,jboolean preferGpu){
  Java_com_mobileagent_NativeModel_unload(e,c);
@@ -97,39 +98,67 @@ static common_chat_templates_inputs chat_inputs(const std::string& messages,cons
  return input;
 }
 
-static bool restore_prefix(const std::string& path,const std::vector<llama_token>& expected){
- if(expected.empty()||access(path.c_str(),R_OK)!=0)return false;
+static size_t restore_prefix(const std::string& path,const std::vector<llama_token>& expected,size_t limit){
+ if(!limit||access(path.c_str(),R_OK)!=0)return 0;
  size_t count=0;
- std::vector<llama_token> saved(expected.size());
- return llama_state_seq_load_file(ctx,path.c_str(),0,saved.data(),saved.size(),&count)
-     && count==expected.size() && saved==expected;
+ std::vector<llama_token> saved(limit);
+ if(!llama_state_seq_load_file(ctx,path.c_str(),0,saved.data(),saved.size(),&count)
+     ||count==0||!std::equal(saved.begin(),saved.begin()+count,expected.begin()))return 0;
+ return count;
+}
+
+static bool save_prefix(const std::string& path,const std::vector<llama_token>& tokens,size_t count){
+ const auto tmp=path+".tmp";
+ if(llama_state_seq_save_file(ctx,tmp.c_str(),0,tokens.data(),count)
+     &&std::rename(tmp.c_str(),path.c_str())==0)return true;
+ std::remove(tmp.c_str());
+ return false;
 }
 
 // Render the real chat template with different first user turns. Their common token
 // prefix can be prefetched without evaluating either user turn or assistant header.
 extern "C" JNIEXPORT jboolean JNICALL Java_com_mobileagent_NativeModel_preparePrefix(
- JNIEnv* e,jclass,jstring file,jstring system,jstring tools,jboolean thinking,jobject cb){
+ JNIEnv* e,jclass,jstring file,jstring system,jstring tools,jboolean thinking,jboolean warm,jobject cb){
  if(!ctx||!model)return JNI_FALSE;
  const auto path=str(e,file), instruction=str(e,system), tool_defs=str(e,tools);
- if(prefix_file==path&&prefix_system==instruction&&prefix_tools==tool_defs&&prefix_thinking==thinking&&access(path.c_str(),R_OK)==0)return JNI_TRUE;
+ if(prefix_file==path&&prefix_system==instruction&&prefix_tools==tool_defs&&prefix_thinking==thinking
+     &&(!warm||resident_prefix>0))return prefix_saved?JNI_TRUE:JNI_FALSE;
+ auto previous_tokens=std::move(prefix_tokens);
+ bool previous_saved=prefix_saved&&prefix_file==path;
  prefix_file.clear();
- prefix_tokens.clear();
+ prefix_saved=false;
  cancelled=false;
  try{
   auto vocab=llama_model_get_vocab(model);
-  auto render=[&](const char* probe){
+  auto render=[&](const char* probe,const std::string& system_text){
    auto messages=common_json::array();
-   messages.push_back(common_json{{"role","system"},{"content",instruction}});
+   messages.push_back(common_json{{"role","system"},{"content",system_text}});
    messages.push_back(common_json{{"role","user"},{"content",std::string(probe)}});
    auto input=chat_inputs(messages.dump(),tool_defs,thinking);
    common_chat_session session(templates.get(),vocab,input);
    return tokenize(vocab,session.prompt().str(),true);
   };
-  auto first=render("Apple");
-  auto second=render("Zebra");
-  auto common=std::mismatch(first.begin(),first.end(),second.begin(),second.end()).first-first.begin();
-  if(common==0||common>=std::min(first.size(),second.size())||common+257>=llama_n_ctx(ctx))return JNI_FALSE;
+  // Keep the checkpoint before the closing system delimiter. Retry guidance
+  // can be appended to the system message without invalidating its base text.
+  auto first=render("Apple",instruction);
+  const auto second=render("Zebra",instruction);
+  const auto boundary=render("\n? Boundary",instruction+"\nCache boundary");
+  size_t common=std::min(
+    std::mismatch(first.begin(),first.end(),second.begin(),second.end()).first-first.begin(),
+    std::mismatch(first.begin(),first.end(),boundary.begin(),boundary.end()).first-first.begin());
+  if(common==0||common>=std::min(first.size(),second.size())||common+257>=llama_n_ctx(ctx)){
+   resident_prefix=0;
+   return JNI_FALSE;
+  }
   first.resize(common);
+  if(first!=previous_tokens)resident_prefix=0;
+  prefix_file=path;
+  prefix_system=instruction;
+  prefix_tools=tool_defs;
+  prefix_thinking=thinking;
+  prefix_saved=first==previous_tokens&&previous_saved;
+  prefix_tokens=std::move(first);
+  if(!warm)return prefix_saved?JNI_TRUE:JNI_FALSE;
   auto cls=e->GetObjectClass(cb);
   auto method=e->GetMethodID(cls,"token","([B)V");
   e->DeleteLocalRef(cls);
@@ -139,32 +168,27 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_mobileagent_NativeModel_preparePr
    e->DeleteLocalRef(payload);
    return !e->ExceptionCheck();
   };
-  llama_memory_clear(llama_get_memory(ctx),true);
-  if(restore_prefix(path,first)){
-   if(!progress(common,true))return JNI_FALSE;
-  }else{
+  if(resident_prefix==0){
    llama_memory_clear(llama_get_memory(ctx),true);
-   if(!progress(0,false))return JNI_FALSE;
-   for(size_t off=0;off<first.size()&&!cancelled;){
-    int size=std::min(size_t(256),first.size()-off);
-    if(llama_decode(ctx,llama_batch_get_one(first.data()+off,size)))return JNI_FALSE;
-    off+=size;
-    if(!progress(off,false))return JNI_FALSE;
-   }
-   if(cancelled)return JNI_FALSE;
-   const auto tmp=path+".tmp";
-   if(!llama_state_seq_save_file(ctx,tmp.c_str(),0,first.data(),first.size())
-       ||std::rename(tmp.c_str(),path.c_str())!=0){
-    std::remove(tmp.c_str());
-    return JNI_FALSE;
+   resident_prefix=restore_prefix(path,prefix_tokens,common);
+   if(resident_prefix>0){
+    prefix_saved=true;
+    if(!progress(resident_prefix,true))return JNI_FALSE;
+   }else{
+    llama_memory_clear(llama_get_memory(ctx),true);
+    if(!progress(0,false))return JNI_FALSE;
+    for(size_t off=0;off<common&&!cancelled;){
+     int size=std::min(size_t(256),common-off);
+     if(llama_decode(ctx,llama_batch_get_one(prefix_tokens.data()+off,size)))return JNI_FALSE;
+     off+=size;
+     if(!progress(off,false))return JNI_FALSE;
+    }
+    if(cancelled)return JNI_FALSE;
+    resident_prefix=common;
+    prefix_saved=save_prefix(path,prefix_tokens,common);
    }
   }
-  prefix_file=path;
-  prefix_system=instruction;
-  prefix_tools=tool_defs;
-  prefix_thinking=thinking;
-  prefix_tokens=std::move(first);
-  return JNI_TRUE;
+  return prefix_saved?JNI_TRUE:JNI_FALSE;
  }catch(const std::exception& ex){
   std::fprintf(stderr,"Instruction cache unavailable: %s\n",ex.what());
   return JNI_FALSE;
@@ -199,26 +223,41 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_mobileagent_NativeModel_generat
   auto a=bytes(e,json);e->CallVoidMethod(cb,method,a);e->DeleteLocalRef(a);
   return !e->ExceptionCheck();
  };
- llama_memory_clear(llama_get_memory(ctx),true);
+ const size_t compatible=std::min(tokens.size()-1,static_cast<size_t>(
+   std::mismatch(prefix_tokens.begin(),prefix_tokens.end(),tokens.begin(),tokens.end()).first-prefix_tokens.begin()));
+ // Avoid replacing the instruction checkpoint with the short common header
+ // of a genuinely different template or system message.
+ const size_t checkpoint=compatible+8>=prefix_tokens.size()?compatible:0;
  size_t cached=0;
- if(!prefix_tokens.empty()&&prefix_tokens.size()<tokens.size()
-     &&std::equal(prefix_tokens.begin(),prefix_tokens.end(),tokens.begin())){
-  if(restore_prefix(prefix_file,prefix_tokens))cached=prefix_tokens.size();
-  else{
+ if(resident_prefix>0&&resident_prefix<=compatible){
+  cached=resident_prefix;
+ }else{
+  llama_memory_clear(llama_get_memory(ctx),true);
+  cached=restore_prefix(prefix_file,prefix_tokens,compatible);
+  if(cached)prefix_saved=true;
+  else if(compatible>0){
+   if(checkpoint>0)prefix_saved=false;
    llama_memory_clear(llama_get_memory(ctx),true);
-   prefix_file.clear();prefix_tokens.clear();
   }
  }
+ resident_prefix=0;
  const auto prefillStarted=std::chrono::steady_clock::now();
  auto prefill=[&](size_t done){
   auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-prefillStarted).count();
-  return publish(common_json{{"prompt_tokens",done},{"prompt_total",tokens.size()},{"cached_tokens",cached},{"elapsed_ms",elapsed}}.dump());
+  return publish(common_json{{"prompt_tokens",done},{"prompt_total",tokens.size()},
+    {"cached_tokens",cached},{"cache_ready",prefix_saved},{"elapsed_ms",elapsed}}.dump());
  };
  if(!prefill(cached))return nullptr;
- for(size_t off=cached;off<tokens.size()&&!cancelled;off+=256){
-  int size=std::min(size_t(256),tokens.size()-off);
-  if(llama_decode(ctx,llama_batch_get_one(tokens.data()+off,size)))throw std::runtime_error("Prompt evaluation failed; reduce context or model size.");
-  if(!prefill(off+size))return nullptr;
+ for(size_t off=cached;off<tokens.size()&&!cancelled;){
+  size_t end=std::min(off+256,tokens.size());
+  // Checkpoint the invariant prefix inside this one pass through the actual prompt.
+  if(cached==0&&off<checkpoint)end=std::min(end,checkpoint);
+  if(llama_decode(ctx,llama_batch_get_one(tokens.data()+off,end-off)))throw std::runtime_error("Prompt evaluation failed; reduce context or model size.");
+  off=end;
+  if(cached==0&&off==checkpoint&&!cancelled){
+   prefix_saved=save_prefix(prefix_file,prefix_tokens,checkpoint);
+  }
+  if(!prefill(off))return nullptr;
  }
  if(cancelled)return bytes(e,"{\"content\":\"\",\"finish_reason\":\"stopped\"}");
  common_params_sampling sp;sp.temp=.6f;sp.top_k=40;sp.top_p=.9f;session->apply_sampling(sp);

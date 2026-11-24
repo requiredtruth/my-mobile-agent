@@ -3,3 +3,4 @@
 - Settings shows whether the instruction KV cache is ready. The cache is stored in persistent private app storage and restored when reopening the app.
 - Replies stream inside the Assistant card. Chat follows new lines without refocusing the scroll view on every token.
 - Automatic speech waits for two ready sentences before starting. A one-sentence response plays when it finishes.
+- Changed instructions are cached within one pass through the real prompt. The app reuses the warmed instruction prefix and reports only newly evaluated prompt tokens.

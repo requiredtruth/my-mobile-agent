@@ -61,17 +61,26 @@ public class IntegrationTest {
   JSONObject response=new JSONObject(new String(result,StandardCharsets.UTF_8));assertFalse(response.optString("content").isEmpty());assertNotNull(last[0]);assertTrue(response.getInt("output_tokens")>0);
   File cache=new File(context.getCacheDir(),"smoke-instructions.kv");
   cache.delete();
-  assertTrue(NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,b->{}));
+  assertTrue(NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,true,b->{}));
   assertTrue(cache.length()>0);
   assertCachedPrompt("Tell stories.","Once upon a time, a little fox",true);
   NativeModel.unload();
   NativeModel.load(model.getAbsolutePath(),2048,2);
   int[] restored={0};
-  assertTrue(NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,b->restored[0]=cachedTokens(b)));
+  assertTrue(NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,true,b->restored[0]=cachedTokens(b)));
   assertTrue(restored[0]>0);
   assertCachedPrompt("Tell stories.","Once upon a time, a little dog",true);
+  assertCachedPrompt("Tell stories.\nContinue with the answer.","Once upon a time, a little dog",true);
   assertCachedPrompt("Write recipes.","Once upon a time, a little dog",false);
   cache.delete();
+  File inline=new File(context.getCacheDir(),"smoke-inline-instructions.kv");
+  inline.delete();
+  assertFalse(NativeModel.preparePrefix(inline.getPath(),"Describe animals.","[]",false,false,
+    b->{throw new AssertionError("Configuration must not prefill separately");}));
+  assertCachedPrompt("Describe animals.","Once upon a time, a little fox",false);
+  assertTrue(inline.length()>0);
+  assertCachedPrompt("Describe animals.","Once upon a time, a little dog",true);
+  inline.delete();
   JSONArray history=new JSONArray().put(Protocol.message("system","Tell stories."));
   for(int i=0;i<60;i++){history.put(Protocol.message("user","The little cat walked through the garden with a friend and saw a bright flower. "+i));history.put(Protocol.message("assistant","The friend smiled and the cat sat on the grass beside the tree."));}
   history.put(Protocol.message("user","Once upon a time, a little cat"));
