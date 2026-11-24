@@ -1,4 +1,5 @@
-- Speech plays at 1.10× Android’s normal rate. Automatic playback starts with two sentences in one utterance, and Speak last reads the saved reply continuously.
+- Settings lets you choose a voice speed from 0.50× to 2.00× and hear it with Test voice. The app saves your selection and starts at 1.10× by default.
+- Automatic playback starts with two sentences in one utterance, and Speak last reads the saved reply continuously.
 - Replies already visible or playing stay in the chat when model output switches to an incomplete tool request. Valid tool calls and results still appear separately.
 - Auto-send voice submits after restoring the last model or selecting a model on first use.
 - Auto-send voice and Speak thinking appear side by side.
