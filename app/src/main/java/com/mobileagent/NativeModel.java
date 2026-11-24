@@ -7,6 +7,7 @@ public final class NativeModel {
   loadBackend(path,context,threads,false);
  }
  static native String loadBackend(String path,int context,int threads,boolean preferGpu);
+ static native void preparePrefix(String file,String system,String tools,boolean thinking,Tokens callback);
  public static native void unload();
  public static native byte[] generate(String messagesJson,String toolsJson,int answerTokens,int thinkingTokens,boolean requireTool,Tokens callback);
  public static native void stop();

@@ -17,7 +17,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
  private static final int EXPORT_GGUF=13;
  static final int BG=0xff10191e,CARD=0xff1b2930,ACCENT=0xff7be5c4,TEXT=0xffedf5f7,MUTED=0xffa9bbc3;
  final Handler handler=new Handler(Looper.getMainLooper());final ExecutorService io=Executors.newSingleThreadExecutor();
- LinearLayout root,body;TextView status,stream;ProgressBar progress;Button stopOrNew;int renderedMessages;ScrollView scroll;EditText composer;Models models;String page="Chat",chat,pendingExport;TextToSpeech tts;boolean ttsReady=false,resumed=false;long speechRound=-1,utteranceId=0;boolean mutedReply=false;SentenceStream sentences=new SentenceStream();android.content.SharedPreferences settings;
+ LinearLayout root,body,liveCards,thinkingCard;TextView status,stream,thinkingStream;ProgressBar progress;Button stopOrNew;int renderedMessages;ScrollView scroll;EditText composer;Models models;String page="Chat",chat,pendingExport;TextToSpeech tts;boolean ttsReady=false,resumed=false;long speechRound=-1,utteranceId=0;boolean mutedReply=false;SentenceStream sentences=new SentenceStream(),thinkingSentences=new SentenceStream();android.content.SharedPreferences settings;
  final Runnable statusTick=new Runnable(){public void run(){
   if(!resumed)return;
   if(Agent.busy)updateStatus();
@@ -54,7 +54,14 @@ public final class MainActivity extends Activity implements Agent.Listener {
  }
  void drawChat(String draft){
   List<String[]> messages=Agent.store.messages(chat);renderedMessages=messages.size();if(messages.isEmpty()){title(body,"Your models. Your assistant.");label(body,"Download an instruct GGUF in Models. Add your knowledge and instructions, then type or speak. Conversations stay on this device.");}
-  for(String[] m:messages)messageCard(m[1],m[2]);stream=text(chat.equals(Agent.activeChat)?Agent.live:"",16,TEXT);body.addView(stream);
+  for(String[] m:messages)messageCard(m[1],m[2]);
+  liveCards=column();
+  body.addView(liveCards);
+  thinkingCard=card(liveCards);
+  thinkingStream=thinkingDetails(thinkingCard,"",true);
+  stream=text("",16,TEXT);
+  liveCards.addView(stream);
+  updateStreams(chat.equals(Agent.activeChat)?Agent.live:"",chat.equals(Agent.activeChat)?Agent.liveThinking:"");
   LinearLayout controls=row();
   LinearLayout voice=row();
   voice.addView(button("Voice",this::listen));
@@ -65,6 +72,12 @@ public final class MainActivity extends Activity implements Agent.Listener {
   autoSend.setOnCheckedChangeListener((button,enabled)->settings.edit().putBoolean("autoSendVoice",enabled).apply());
   voice.addView(autoSend);
   root.addView(voice);
+  CheckBox speakThinking=new CheckBox(this);
+  speakThinking.setText("Speak thinking");
+  speakThinking.setTextColor(TEXT);
+  speakThinking.setChecked(settings.getBoolean("speakThinking",true));
+  speakThinking.setOnCheckedChangeListener((button,enabled)->settings.edit().putBoolean("speakThinking",enabled).apply());
+  root.addView(speakThinking);
   stopOrNew=button(Agent.busy?"Stop":"New",()->{
    if(Agent.busy){silence();Agent.stopped=true;NativeModel.stop();Agent.stage("Stopping");}
    else{silence();chat=Agent.store.newChat();render();}
@@ -81,7 +94,22 @@ public final class MainActivity extends Activity implements Agent.Listener {
   root.addView(progress,new LinearLayout.LayoutParams(-1,dp(5)));
   scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
  }
- void messageCard(String role,String value){LinearLayout c=card(body);if(role.equals("reasoning")){TextView details=text(value,13,MUTED);details.setTextIsSelectable(true);details.setVisibility(View.GONE);c.addView(button("Thinking · show / hide",()->details.setVisibility(details.getVisibility()==View.GONE?View.VISIBLE:View.GONE)));c.addView(details);return;}TextView who=text(role.equals("tool")?"TOOL · local execution":role.equals("user")?"YOU":role.equals("error")?"ERROR":"ASSISTANT",11,role.equals("tool")?ACCENT:MUTED);c.addView(who);TextView t=text(value,role.equals("tool")?13:16,TEXT);t.setTextIsSelectable(true);if(role.equals("tool"))t.setTypeface(Typeface.MONOSPACE);c.addView(t);}
+ void messageCard(String role,String value){LinearLayout c=card(body);if(role.equals("reasoning")){thinkingDetails(c,value,false);return;}TextView who=text(role.equals("tool")?"TOOL · local execution":role.equals("user")?"YOU":role.equals("error")?"ERROR":"ASSISTANT",11,role.equals("tool")?ACCENT:MUTED);c.addView(who);TextView t=text(value,role.equals("tool")?13:16,TEXT);t.setTextIsSelectable(true);if(role.equals("tool"))t.setTypeface(Typeface.MONOSPACE);c.addView(t);}
+ TextView thinkingDetails(LinearLayout card,String value,boolean expanded){
+  TextView details=text(value,13,MUTED);
+  details.setTextIsSelectable(true);
+  details.setVisibility(expanded?View.VISIBLE:View.GONE);
+  card.addView(button("Thinking · show / hide",()->details.setVisibility(details.getVisibility()==View.GONE?View.VISIBLE:View.GONE)));
+  card.addView(details);
+  return details;
+ }
+ void updateStreams(String reply,String thinking){
+  if(thinkingCard.getVisibility()==View.GONE&&!thinking.isEmpty())thinkingStream.setVisibility(View.VISIBLE);
+  thinkingStream.setText(thinking);
+  thinkingCard.setVisibility(thinking.isEmpty()?View.GONE:View.VISIBLE);
+  stream.setText(reply);
+  stream.setVisibility(reply.isEmpty()?View.GONE:View.VISIBLE);
+ }
  void send(){if(Agent.busy){Toast.makeText(this,"Wait for the current operation or tap Stop",Toast.LENGTH_SHORT).show();return;}String q=composer.getText().toString().trim();if(q.isEmpty())return;if(Agent.loaded.isEmpty()){page="Models";render();return;}tts.stop();mutedReply=false;Agent.store.message(chat,"user",q);composer.setText("");startForegroundService(new Intent(this,AgentService.class).setAction("chat").putExtra("chat",chat).putExtra("question",q));render();}
  void updateStatus(){
   int percent=Agent.percent;
@@ -106,22 +134,33 @@ public final class MainActivity extends Activity implements Agent.Listener {
   stopOrNew.setText(Agent.busy?"Stop":"New");
   if(!chat.equals(id))return;
   String latest=Agent.live;
-  if(latest.isEmpty()){
+  if(latest.isEmpty()&&Agent.liveThinking.isEmpty()){
    List<String[]> saved=Agent.store.messages(chat);
    if(saved.size()>renderedMessages){
-    body.removeView(stream);
+    body.removeView(liveCards);
     for(int i=renderedMessages;i<saved.size();i++)messageCard(saved.get(i)[1],saved.get(i)[2]);
-    body.addView(stream);
+    body.addView(liveCards);
     renderedMessages=saved.size();
    }
   }
-  stream.setText(latest);
+  updateStreams(latest,Agent.liveThinking);
   scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
  });}
- public void speech(String id,long round,String text,boolean finished){runOnUiThread(()->{
-  if(isDestroyed()||!chat.equals(id)||mutedReply||Agent.stopped||!ttsReady||!settings.getBoolean("speak",true))return;
-  if(speechRound!=round){speechRound=round;sentences=new SentenceStream();}
-  sentences.append(text,finished,this::enqueueSpeech);
+ public void speech(String id,long round,String text,boolean finished){
+  streamSpeech(id,round,text,finished,false);
+ }
+ public void thinkingSpeech(String id,long round,String text,boolean finished){
+  streamSpeech(id,round,text,finished,true);
+ }
+ void streamSpeech(String id,long round,String text,boolean finished,boolean thinking){runOnUiThread(()->{
+  if(isDestroyed()||!chat.equals(id)||mutedReply||Agent.stopped||!ttsReady)return;
+  if(!settings.getBoolean(thinking?"speakThinking":"speak",true))return;
+  if(speechRound!=round){
+   speechRound=round;
+   sentences=new SentenceStream();
+   thinkingSentences=new SentenceStream();
+  }
+  (thinking?thinkingSentences:sentences).append(text,finished,this::enqueueSpeech);
  });}
  void silence(){mutedReply=true;tts.stop();}
  void enqueueSpeech(String text){

@@ -16,7 +16,15 @@ public final class AgentService extends Service {
     boolean preferGpu=settings.getBoolean("gpu",true);
     Agent.stage(preferGpu?"Loading model · checking GPU":"Loading model on CPU");
     Agent.backend=NativeModel.loadBackend(f.getAbsolutePath(),settings.getInt("context",4096),
-      Runtime.getRuntime().availableProcessors(),preferGpu);Agent.loaded=f.getName();getSharedPreferences("settings",0).edit().putString("model",f.getAbsolutePath()).apply();Agent.status="Ready";}else {Agent.answerTokens=getSharedPreferences("settings",0).getInt("answerTokens",1536);Agent.thinkingTokens=getSharedPreferences("settings",0).getInt("thinkingTokens",0);Agent.run(chat,i.getStringExtra("question"));}}catch(Throwable e){Agent.status="Error: "+e.getMessage();}finally{Agent.busy=false;if(lock.isHeld())lock.release();Agent.emit();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();}});return START_NOT_STICKY;
+      Runtime.getRuntime().availableProcessors(),preferGpu);Agent.loaded=f.getName();
+    String identity=f.getCanonicalPath()+"\n"+f.length()+"\n"+f.lastModified()+"\n"+
+      settings.getInt("context",4096)+"\n"+Agent.backend+"\n"+getPackageManager().getPackageInfo(getPackageName(),0).versionCode;
+    String key=android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256")
+      .digest(identity.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+      android.util.Base64.URL_SAFE|android.util.Base64.NO_WRAP|android.util.Base64.NO_PADDING);
+    Agent.prefixFile=new java.io.File(getCacheDir(),"instructions-"+key+".kv").getAbsolutePath();
+    Agent.preparePrefix(Agent.store.instructions()+"\n"+Agent.TOOLS,settings.getInt("thinkingTokens",0)>0);
+    getSharedPreferences("settings",0).edit().putString("model",f.getAbsolutePath()).apply();Agent.status="Ready";}else {Agent.answerTokens=getSharedPreferences("settings",0).getInt("answerTokens",1536);Agent.thinkingTokens=getSharedPreferences("settings",0).getInt("thinkingTokens",0);Agent.run(chat,i.getStringExtra("question"));}}catch(Throwable e){Agent.status="Error: "+e.getMessage();}finally{Agent.busy=false;if(lock.isHeld())lock.release();Agent.emit();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();}});return START_NOT_STICKY;
  }
  public void onTimeout(int startId,int fgsType){Agent.stopped=true;NativeModel.stop();stopSelf();}
  public IBinder onBind(Intent i){return null;}

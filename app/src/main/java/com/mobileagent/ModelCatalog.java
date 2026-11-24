@@ -17,6 +17,8 @@ public final class ModelCatalog {
   new Entry("Qwen3 0.6B · Q8_0","Qwen/Qwen3-0.6B-GGUF","23749fefcc72300e3a2ad315e1317431b06b590a","Qwen3-0.6B-Q8_0.gguf",639446688L,"Small thinking/chat model."),
   new Entry("SmolLM2 360M Instruct · Q8_0","HuggingFaceTB/SmolLM2-360M-Instruct-GGUF","593b5a2e04c8f3e4ee880263f93e0bd2901ad47f","smollm2-360m-instruct-q8_0.gguf",386404992L,"Very small starter model; limited agent capability."),
   new Entry("Spark-X2.5 1.7B · Q8_0","XHToken/Spark-X2.5-1.7B-GGUF","1f7fa33b1245c14730da39e125714ad3a327901b","Spark-X2.5-1.7B-Q8_0.gguf",1820112704L,"Higher precision; more RAM and storage."),
-  new Entry("Spark-X2.5 4B · Q8_0","XHToken/Spark-X2.5-4B-GGUF","9826e0be84e6e6e8b9668abc91421109a1df1e2d","Spark-X2.5-4B-Q8_0.gguf",4375021152L,"Large download; suited to phones with substantial free RAM.")
+  new Entry("Spark-X2.5 4B · Q8_0","XHToken/Spark-X2.5-4B-GGUF","9826e0be84e6e6e8b9668abc91421109a1df1e2d","Spark-X2.5-4B-Q8_0.gguf",4375021152L,"Large download; suited to phones with substantial free RAM."),
+  new Entry("SmolLM2 360M Instruct · Q4_K_M","bartowski/SmolLM2-360M-Instruct-GGUF","7be6f65f1db715fe5dc5a4634c0d459b4eed42ec","SmolLM2-360M-Instruct-Q4_K_M.gguf",270590880L,"Small model for quick chat and voice tests."),
+  new Entry("SmolLM2 135M Instruct · Q4_K_M","QuantFactory/SmolLM2-135M-Instruct-GGUF","476854d00ede130660aba430d15f9347ad2e7d0e","SmolLM2-135M-Instruct.Q4_K_M.gguf",105454144L,"Fastest catalog option for basic chat tests; limited answer quality.")
  };
 }

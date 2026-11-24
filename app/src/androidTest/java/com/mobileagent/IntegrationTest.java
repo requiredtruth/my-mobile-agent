@@ -10,7 +10,7 @@ import org.json.*;
 public class IntegrationTest {
  Context context;Store db;
  @Before public void setup(){context=InstrumentationRegistry.getInstrumentation().getTargetContext();context.deleteDatabase("agent.db");db=new Store(context);Agent.store=db;Agent.stopped=false;Agent.memory=new CubeMemory(db);Agent.memory.changed();}
- @After public void close(){Agent.generator=NativeModel::generate;Agent.loaded="";Agent.memory.close();db.close();Agent.store=null;Agent.memory=null;}
+ @After public void close(){Agent.listener=null;Agent.generator=NativeModel::generate;Agent.loaded="";Agent.memory.close();db.close();Agent.store=null;Agent.memory=null;}
  @Test public void conversationRetrievalIsRequestOnly()throws Exception{
   String old=db.newChat();db.message(old,"user","The lighthouse access code is violet.");db.message(old,"assistant","Remembered the lighthouse note.");db.message(old,"user","The nearby dock opens at noon.");String current=db.newChat();db.message(current,"user","New private thread");
   assertEquals("[]",db.searchChats("absent",current));JSONArray hits=new JSONArray(db.searchChats("lighthouse",current));assertTrue(hits.length()>0);
@@ -50,12 +50,35 @@ public class IntegrationTest {
    }catch(JSONException e){throw new AssertionError(e);}
   });assertEquals(2,prefill.size());assertEquals(0,(int)prefill.get(0));assertTrue(prefill.get(1)>0);
   JSONObject response=new JSONObject(new String(result,StandardCharsets.UTF_8));assertFalse(response.optString("content").isEmpty());assertNotNull(last[0]);assertTrue(response.getInt("output_tokens")>0);
+  File cache=new File(context.getCacheDir(),"smoke-instructions.kv");
+  cache.delete();
+  NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,b->{});
+  assertTrue(cache.length()>0);
+  assertCachedPrompt("Tell stories.","Once upon a time, a little fox",true);
+  NativeModel.unload();
+  NativeModel.load(model.getAbsolutePath(),2048,2);
+  int[] restored={0};
+  NativeModel.preparePrefix(cache.getPath(),"Tell stories.","[]",false,b->restored[0]=cachedTokens(b));
+  assertTrue(restored[0]>0);
+  assertCachedPrompt("Tell stories.","Once upon a time, a little dog",true);
+  assertCachedPrompt("Write recipes.","Once upon a time, a little dog",false);
+  cache.delete();
   JSONArray history=new JSONArray().put(Protocol.message("system","Tell stories."));
   for(int i=0;i<60;i++){history.put(Protocol.message("user","The little cat walked through the garden with a friend and saw a bright flower. "+i));history.put(Protocol.message("assistant","The friend smiled and the cat sat on the grass beside the tree."));}
   history.put(Protocol.message("user","Once upon a time, a little cat"));
   JSONObject trimmed=new JSONObject(new String(NativeModel.generate(history.toString(),"[]",256,0,false,b->{}),StandardCharsets.UTF_8));assertTrue(trimmed.getInt("trimmed_turns")>0);assertFalse(trimmed.optString("content").isEmpty());
   JSONObject stopped=new JSONObject(new String(NativeModel.generate("[{\"role\":\"user\",\"content\":\"Once upon a time\"}]","[]",256,0,false,b->NativeModel.stop()),StandardCharsets.UTF_8));assertEquals("stopped",stopped.getString("finish_reason"));
   NativeModel.unload();model.delete();
+ }
+ private static int cachedTokens(byte[] update){
+  try{return new JSONObject(new String(update,StandardCharsets.UTF_8)).optInt("cached_tokens");}
+  catch(JSONException e){throw new AssertionError(e);}
+ }
+ private static void assertCachedPrompt(String instructions,String user,boolean expected)throws Exception{
+  JSONArray messages=new JSONArray().put(Protocol.message("system",instructions)).put(Protocol.message("user",user));
+  int[] cached={0};
+  NativeModel.generate(messages.toString(),"[]",256,0,false,b->cached[0]=Math.max(cached[0],cachedTokens(b)));
+  assertEquals(expected,cached[0]>0);
  }
  @Test public void thinkingAndStrictToolBoundaries()throws Exception{
   assertEquals("Fire is combustion.",Protocol.answer("<think>plan</think>Fire is combustion."));
@@ -69,9 +92,21 @@ public class IntegrationTest {
  }
  @Test public void nativeToolRoundTripThenFinalAnswer()throws Exception{
   String chat=db.newChat();db.message(chat,"user","Find lighthouse in past notes");Agent.loaded="test";int[] runs={0};
+  List<String> spokenThinking=new ArrayList<>();
+  Agent.listener=new Agent.Listener(){
+   @Override public void update(String id,String live){}
+   @Override public void thinkingSpeech(String id,long round,String text,boolean finished){
+    if(!finished)spokenThinking.add(text);
+   }
+  };
   Agent.generator=(messages,tools,answer,thinking,required,callback)->{try{
    assertEquals(1536,answer);JSONArray input=new JSONArray(messages);JSONObject output;
-   if(runs[0]++==0){assertEquals(3,new JSONArray(tools).length());output=new JSONObject("{\"content\":\"\",\"finish_reason\":\"stop\",\"reasoning_content\":\"Need past notes\",\"tool_calls\":[{\"id\":\"call1\",\"type\":\"function\",\"function\":{\"name\":\"conversations.search\",\"arguments\":\"{\\\"query\\\":\\\"lighthouse\\\"}\"}}]}");}
+   if(runs[0]++==0){assertEquals(3,new JSONArray(tools).length());
+    callback.token(new JSONObject().put("reasoning_content","Need past notes").toString().getBytes(StandardCharsets.UTF_8));
+    assertEquals("Need past notes",Agent.liveThinking);
+    assertEquals("",Agent.live);
+    assertEquals(Collections.singletonList("Need past notes"),spokenThinking);
+    output=new JSONObject("{\"content\":\"\",\"finish_reason\":\"stop\",\"reasoning_content\":\"Need past notes\",\"tool_calls\":[{\"id\":\"call1\",\"type\":\"function\",\"function\":{\"name\":\"conversations.search\",\"arguments\":\"{\\\"query\\\":\\\"lighthouse\\\"}\"}}]}");}
    else{JSONObject result=input.getJSONObject(input.length()-1);assertEquals("tool",result.getString("role"));assertEquals("call1",result.getString("tool_call_id"));assertTrue(result.getString("content").contains("Untrusted"));output=new JSONObject().put("content","No past notes matched.").put("finish_reason","stop");}
    byte[] bytes=output.toString().getBytes(StandardCharsets.UTF_8);callback.token(bytes);return bytes;
   }catch(JSONException e){throw new AssertionError(e);}};

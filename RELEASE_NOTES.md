@@ -1,10 +1,4 @@
-- View the current stage, percentage, and tokens per second below the chat buttons. Prefill reports processed prompt tokens, percentage and speed. Reply progress tracks the generation budget used. The elapsed timer keeps ticking through preparation, retrieval and pauses between token updates.
-- See the local model's reply grow in place as text arrives.
-- Automatic voice playback queues completed sentences in order and reads the final fragment when generation ends. Use Silence to mute the current reply or Settings to control automatic playback.
-
-- Export downloaded or imported GGUF models to a location you choose, then import the same file after reinstalling.
-- Auto-send voice submits recognized speech by default. Uncheck it next to Voice to review your transcript before sending.
-
-- Arm64 builds use runtime-dispatched KleidiAI CPU kernels and attempt Vulkan offload on supported devices, with CPU fallback during model load. The status shows the selected backend.
-
-This build starts a new Android signing identity. Back up any local data you need before uninstalling build 11 or earlier and installing this APK.
+- Watch reasoning-capable GGUF models stream their Thinking text in a separate expandable card.
+- Speak thinking is on by default and is independent of automatic reply playback.
+- Loading a model prepares and saves the initial instruction KV cache. Subsequent prompts and new chats reuse it when their rendered token prefix matches. Prefill status shows the reused token count.
+- Two smaller Q4_K_M models are available at the bottom of the catalog for quick testing. SmolLM2 135M is approximately 101 MiB and SmolLM2 360M is approximately 258 MiB.
