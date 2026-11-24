@@ -15,6 +15,9 @@ import java.util.concurrent.*;
 
 public final class MainActivity extends Activity implements Agent.Listener {
  private static final int EXPORT_GGUF=13;
+ private static final int MIN_VOICE_SPEED=50, MAX_VOICE_SPEED=200, DEFAULT_VOICE_SPEED=110;
+ private static final int VOICE_SPEED_STEP=5;
+ private static final String VOICE_SPEED="voiceSpeedPercent";
  private String queuedVoice, queuedChat;
  private String chatDraft="";
  private boolean restoreChecked;
@@ -31,7 +34,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
  final Runnable poll=new Runnable(){public void run(){if(resumed&&page.equals("Models"))render();if(resumed)handler.postDelayed(this,1500);}};
  public void onCreate(Bundle state){super.onCreate(state);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);settings=getSharedPreferences("settings",0);pendingExport=state==null?null:state.getString("pendingExport");queuedVoice=state==null?null:state.getString("queuedVoice");queuedChat=state==null?null:state.getString("queuedChat");models=new Models(this);if(Agent.store==null){Agent.store=new Store(this);Agent.memory=new CubeMemory(Agent.store);}chat=state==null?settings.getString("chat",null):state.getString("chat");if(chat==null||Agent.store.rows("SELECT id FROM chats WHERE id=?",chat).isEmpty())chat=Agent.store.newChat();tts=new TextToSpeech(this,result->handler.post(()->{
   if(!isDestroyed()&&result==TextToSpeech.SUCCESS){
-   tts.setSpeechRate(1.10f);
+   tts.setSpeechRate(voiceSpeedPercent()/100f);
    ttsReady=true;
   }
  }));render();if(state!=null)composer.setText(state.getString("draft",""));if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},5);}
@@ -363,7 +366,46 @@ public final class MainActivity extends Activity implements Agent.Listener {
  void drawInstructions(){title(body,"System instructions");label(body,"Enabled instructions are compiled in the displayed order for every turn. Use ↑ and ↓ to change precedence. Tool definitions are appended automatically.");body.addView(button("Add instruction",()->editInstruction(null)));List<String[]> rows=Agent.store.rows("SELECT id,title,text,enabled,position FROM instructions ORDER BY position,id");for(int i=0;i<rows.size();i++){String[] r=rows.get(i);LinearLayout c=card(body);Switch enabled=new Switch(this);enabled.setText(r[1]);enabled.setTextColor(TEXT);enabled.setChecked(r[3].equals("1"));enabled.setOnCheckedChangeListener((b,on)->Agent.store.getWritableDatabase().execSQL("UPDATE instructions SET enabled=? WHERE id=?",new Object[]{on?1:0,r[0]}));c.addView(enabled);label(c,r[2]);LinearLayout actions=row();actions.addView(button("Edit",()->editInstruction(r)));final int idx=i;actions.addView(button("↑",()->moveInstruction(rows,idx,-1)));actions.addView(button("↓",()->moveInstruction(rows,idx,1)));actions.addView(button("Delete",()->confirm("Delete instruction?",()->{Agent.store.getWritableDatabase().delete("instructions","id=?",new String[]{r[0]});render();})));c.addView(actions);}}
  void moveInstruction(List<String[]> rows,int i,int delta){int j=i+delta;if(j<0||j>=rows.size())return;Collections.swap(rows,i,j);android.database.sqlite.SQLiteDatabase db=Agent.store.getWritableDatabase();db.beginTransaction();try{for(int k=0;k<rows.size();k++)db.execSQL("UPDATE instructions SET position=? WHERE id=?",new Object[]{k,rows.get(k)[0]});db.setTransactionSuccessful();}finally{db.endTransaction();}render();}
  void editInstruction(String[] r){LinearLayout v=column();EditText name=input("Instruction name",r==null?"":r[1],false),content=input("System instruction",r==null?"":r[2],true);v.addView(name);v.addView(content);new AlertDialog.Builder(this).setTitle("System instruction").setView(v).setPositiveButton("Save",(d,w)->{if(content.getText().toString().trim().isEmpty())return;ContentValues values=new ContentValues();values.put("title",name.getText().toString());values.put("text",content.getText().toString());if(r==null){values.put("enabled",1);values.put("position",Agent.store.rows("SELECT id FROM instructions").size());Agent.store.getWritableDatabase().insertOrThrow("instructions",null,values);}else Agent.store.getWritableDatabase().update("instructions",values,"id=?",new String[]{r[0]});render();}).setNegativeButton("Cancel",null).show();}
- void drawSettings(){title(body,"Settings");cacheSystem=Agent.store.instructions()+"\n"+Agent.TOOLS;cacheStatus=text("",14,MUTED);body.addView(cacheStatus);Switch speak=new Switch(this);speak.setText("Speak replies automatically");speak.setTextColor(TEXT);speak.setChecked(settings.getBoolean("speak",true));speak.setOnCheckedChangeListener((b,on)->{settings.edit().putBoolean("speak",on).apply();if(!on)silence();});body.addView(speak);label(body,"Voice input uses the installed Android speech recognizer and requests offline recognition. Availability and network use depend on your speech provider. Voice output uses Android text-to-speech.");body.addView(button("Android voice settings",()->startActivity(new Intent("com.android.settings.TTS_SETTINGS"))));title(body,"Generation");label(body,"Thinking: "+settings.getInt("thinkingTokens",0)+" tokens. Off gives direct answers; Short caps reasoning at 128 tokens. Changes apply on the next message.");for(int n:new int[]{0,128,256})body.addView(button(n==0?"Thinking off (default)":"Thinking · "+n+" tokens",()->{settings.edit().putInt("thinkingTokens",n).apply();render();}));label(body,"Answer length: "+settings.getInt("answerTokens",1536)+" tokens, separate from the thinking allowance. Older turns are trimmed to reserve output space; the current question is kept.");for(int n:new int[]{768,1536,3072})body.addView(button(n+" answer tokens",()->{settings.edit().putInt("answerTokens",n).apply();render();}));title(body,"Acceleration");
+ private int voiceSpeedPercent(){
+  return settings.getInt(VOICE_SPEED,DEFAULT_VOICE_SPEED);
+ }
+ private String voiceSpeedValue(int percent){
+  return String.format(Locale.getDefault(),"%.2f×",percent/100f);
+ }
+ private void drawVoiceSpeed(){
+  int percent=voiceSpeedPercent();
+  TextView speedLabel=text("Voice speed · "+voiceSpeedValue(percent),14,TEXT);
+  body.addView(speedLabel);
+  SeekBar speed=new SeekBar(this);
+  speed.setContentDescription("Voice speed");
+  speed.setMax((MAX_VOICE_SPEED-MIN_VOICE_SPEED)/VOICE_SPEED_STEP);
+  speed.setProgress((percent-MIN_VOICE_SPEED)/VOICE_SPEED_STEP);
+  if(Build.VERSION.SDK_INT>=30)speed.setStateDescription(voiceSpeedValue(percent));
+  speed.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+   @Override public void onProgressChanged(SeekBar bar,int progress,boolean fromUser){
+    int selected=MIN_VOICE_SPEED+progress*VOICE_SPEED_STEP;
+    String value=voiceSpeedValue(selected);
+    speedLabel.setText("Voice speed · "+value);
+    if(Build.VERSION.SDK_INT>=30)bar.setStateDescription(value);
+    settings.edit().putInt(VOICE_SPEED,selected).apply();
+    if(ttsReady)tts.setSpeechRate(selected/100f);
+   }
+   @Override public void onStartTrackingTouch(SeekBar bar){}
+   @Override public void onStopTrackingTouch(SeekBar bar){}
+  });
+  body.addView(speed,new LinearLayout.LayoutParams(-1,-2));
+  body.addView(button("Test voice",this::testVoice));
+ }
+ private void testVoice(){
+  if(!ttsReady){
+   error(new IllegalStateException("Choose or install an Android text-to-speech voice in system settings."));
+   return;
+  }
+  int result=tts.speak("This is how My Mobile Agent sounds at your selected speed.",
+    TextToSpeech.QUEUE_FLUSH,null,"voice-test-"+(++utteranceId));
+  if(result==TextToSpeech.ERROR)error(new IllegalStateException("Android could not play the voice sample."));
+ }
+ void drawSettings(){title(body,"Settings");cacheSystem=Agent.store.instructions()+"\n"+Agent.TOOLS;cacheStatus=text("",14,MUTED);body.addView(cacheStatus);Switch speak=new Switch(this);speak.setText("Speak replies automatically");speak.setTextColor(TEXT);speak.setChecked(settings.getBoolean("speak",true));speak.setOnCheckedChangeListener((b,on)->{settings.edit().putBoolean("speak",on).apply();if(!on)silence();});body.addView(speak);drawVoiceSpeed();label(body,"Voice input uses the installed Android speech recognizer and requests offline recognition. Availability and network use depend on your speech provider. Voice output uses Android text-to-speech.");body.addView(button("Android voice settings",()->startActivity(new Intent("com.android.settings.TTS_SETTINGS"))));title(body,"Generation");label(body,"Thinking: "+settings.getInt("thinkingTokens",0)+" tokens. Off gives direct answers; Short caps reasoning at 128 tokens. Changes apply on the next message.");for(int n:new int[]{0,128,256})body.addView(button(n==0?"Thinking off (default)":"Thinking · "+n+" tokens",()->{settings.edit().putInt("thinkingTokens",n).apply();render();}));label(body,"Answer length: "+settings.getInt("answerTokens",1536)+" tokens, separate from the thinking allowance. Older turns are trimmed to reserve output space; the current question is kept.");for(int n:new int[]{768,1536,3072})body.addView(button(n+" answer tokens",()->{settings.edit().putInt("answerTokens",n).apply();render();}));title(body,"Acceleration");
   Switch gpu=new Switch(this);
   gpu.setText("Use Vulkan when supported");
   gpu.setTextColor(TEXT);
