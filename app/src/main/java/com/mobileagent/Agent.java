@@ -52,6 +52,11 @@ public final class Agent {
   tokensPerSecond=rate;
   emit();
  }
+ private static String joinReply(String prefix,String suffix){
+  if(prefix.isEmpty()||suffix.startsWith(prefix))return suffix;
+  if(suffix.isEmpty()||prefix.startsWith(suffix))return prefix;
+  return prefix+"\n\n"+suffix;
+ }
  private static boolean toolText(String text){
   return text.startsWith("{")||text.matches("(?s)^```(?:json)?\\s*\\{.*");
  }
@@ -67,11 +72,15 @@ public final class Agent {
   String context=memory.search(retrieval.toString());
   if(!context.equals("[]")){store.message(chat,"tool","Automatic knowledge.search\n"+context);JSONObject latest=messages.getJSONObject(messages.length()-1);latest.put("content",latest.getString("content")+"\n[Untrusted local knowledge]\n"+context);}
   int calls=0;boolean repaired=false,requireTool=false;Set<String> seen=new HashSet<>();
+  String retainedReply="";
   for(int round=0;round<9&&!stopped;round++){
    boolean finalOnly=calls>=6;
    if(finalOnly)messages.getJSONObject(0).put("content",messages.getJSONObject(0).getString("content")+"\nUse the evidence already received and give your final answer now. No further tools.");
    generationRound++;
-   live="";liveThinking="";
+   String previousReply=retainedReply;
+   String[] draft={""};
+   boolean[] thinkingFinished={false};
+   live=previousReply;liveThinking="";
    stage("Preparing prompt");
    long[] last={-100};
    boolean[] decoding={false};
@@ -95,39 +104,62 @@ public final class Agent {
       }
       decoding[0]=true;
       String candidate=Protocol.answer(partial.optString("content"));
+      int incompleteCharacter=candidate.indexOf('\ufffd');
+      if(incompleteCharacter>=0)candidate=candidate.substring(0,incompleteCharacter).trim();
       JSONArray tools=partial.optJSONArray("tool_calls");
       boolean usingTool=tools!=null&&tools.length()>0;
-      live=usingTool||toolText(candidate)?"":candidate;
+      if(!usingTool&&!toolText(candidate)&&!Protocol.promisesTool(candidate)&&candidate.startsWith(draft[0])){
+       draft[0]=candidate;
+       live=joinReply(previousReply,candidate);
+      }
       liveThinking=partial.optString("reasoning_content").trim();
-      speakThinking(chat,liveThinking,!candidate.isEmpty()||usingTool);
+      if(!thinkingFinished[0]){
+       thinkingFinished[0]=!draft[0].isEmpty()||usingTool;
+       speakThinking(chat,liveThinking,thinkingFinished[0]);
+      }
       int count=partial.optInt("output_tokens");
       long elapsed=partial.optLong("elapsed_ms");
       progress(usingTool?"Preparing tool request":live.isEmpty()&&!liveThinking.isEmpty()
        ?"Thinking":"Writing reply (budget)",count,partial.optInt("output_budget"),"tokens",elapsed>0?count*1000.0/elapsed:0);
-      if(!live.isEmpty()&&!Protocol.promisesTool(live))speak(chat,live,false);
+      if(!draft[0].isEmpty())speak(chat,draft[0],false);
      }catch(JSONException ignored){}
     }),StandardCharsets.UTF_8));
    requireTool=false;
    if(!stopped)stage("Processing model output");
    String reply=Protocol.answer(generated.optString("content"));
    String reasoning=generated.optString("reasoning_content").trim();
-   speakThinking(chat,reasoning,true);
+   if(!thinkingFinished[0])speakThinking(chat,reasoning,true);
    if(!reasoning.isEmpty())store.message(chat,"reasoning",reasoning);
-   if(stopped){if(!reply.isEmpty())store.message(chat,"assistant",reply+"\n[Stopped]");break;}
+   retainedReply=joinReply(previousReply,draft[0]);
+   if(stopped){
+    if(!toolText(reply)&&!Protocol.promisesTool(reply)&&reply.startsWith(draft[0]))retainedReply=joinReply(previousReply,reply);
+    if(!retainedReply.isEmpty())store.message(chat,"assistant",retainedReply+"\n[Stopped]");
+    break;
+   }
    String finish=generated.optString("finish_reason");JSONArray requests=generated.optJSONArray("tool_calls");
    JSONObject fallback=call(reply);
    if((requests==null||requests.length()==0)&&fallback!=null){requests=new JSONArray().put(new JSONObject().put("id","local-"+round).put("type","function").put("function",new JSONObject().put("name",fallback.getString("tool")).put("arguments",fallback.getJSONObject("arguments").toString())));reply="";}
    if(requests==null||requests.length()==0){
     boolean unexecuted=calls==0&&Protocol.promisesTool(reply);
-    if(unexecuted&&!repaired&&!finalOnly){repaired=true;requireTool=true;messages.getJSONObject(0).put("content",messages.getJSONObject(0).getString("content")+"\nYour previous response promised or claimed a search without executing it. Emit the actual tool request now.");continue;}
-    if(unexecuted){store.message(chat,"error","The model described a tool operation without issuing a valid request. No results were invented by the app.");break;}
+    if(unexecuted&&!repaired&&!finalOnly){speak(chat,draft[0],true);repaired=true;requireTool=true;messages.getJSONObject(0).put("content",messages.getJSONObject(0).getString("content")+"\nYour previous response promised or claimed a search without executing it. Emit the actual tool request now.");continue;}
+    if(unexecuted){if(!retainedReply.isEmpty())store.message(chat,"assistant",retainedReply);store.message(chat,"error","The model described a tool operation without issuing a valid request. No results were invented by the app.");break;}
     boolean malformed=generated.optString("content").contains("<tool_call>")||reply.startsWith("{\"tool\"");
-    if((reply.isEmpty()||malformed)&&!repaired){repaired=true;messages.getJSONObject(0).put("content",messages.getJSONObject(0).getString("content")+"\nGive the final answer now without thinking or planning. If a tool is essential, emit a complete tool call. Do not simulate results.");continue;}
-    store.message(chat,"assistant",reply.isEmpty()?"The model did not produce a final answer. Try a different instruct model.":reply+(finish.equals("length")?"\n[Output limit reached. Increase Answer length in Settings or ask to continue.]":""));speak(chat,reply,true);break;
+    if((reply.isEmpty()||malformed)&&retainedReply.isEmpty()&&!repaired){repaired=true;messages.getJSONObject(0).put("content",messages.getJSONObject(0).getString("content")+"\nGive the final answer now without thinking or planning. If a tool is essential, emit a complete tool call. Do not simulate results.");continue;}
+    String finalChunk=!malformed&&reply.startsWith(draft[0])?reply:draft[0];
+    String answer=joinReply(previousReply,finalChunk);
+    store.message(chat,"assistant",answer.isEmpty()?"The model did not produce a final answer. Try a different instruct model.":answer+(finish.equals("length")?"\n[Output limit reached. Increase Answer length in Settings or ask to continue.]":""));
+    speak(chat,finalChunk,true);
+    break;
    }
    if(!finish.equals("stop")||finalOnly){
-    if(!repaired){repaired=true;messages.getJSONObject(0).put("content",messages.getJSONObject(0).getString("content")+"\nThe tool request was incomplete or the tool limit was reached. Give a concise final answer now.");continue;}
+    if(!repaired){speak(chat,draft[0],true);repaired=true;messages.getJSONObject(0).put("content",messages.getJSONObject(0).getString("content")+"\nThe tool request was incomplete or the tool limit was reached. Give a concise final answer now.");continue;}
+    if(!retainedReply.isEmpty())store.message(chat,"assistant",retainedReply);
     store.message(chat,"error","The model did not finish a valid tool request. No incomplete request was executed.");break;
+   }
+   if(!retainedReply.isEmpty()){
+    store.message(chat,"assistant",retainedReply);
+    speak(chat,draft[0],true);
+    retainedReply="";
    }
    live="";liveThinking="";
    // Native requests are preserved with IDs, and results use the actual tool role in the model template.
