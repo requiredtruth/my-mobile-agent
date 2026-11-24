@@ -29,7 +29,12 @@ public final class MainActivity extends Activity implements Agent.Listener {
   handler.postDelayed(this,250);
  }};
  final Runnable poll=new Runnable(){public void run(){if(resumed&&page.equals("Models"))render();if(resumed)handler.postDelayed(this,1500);}};
- public void onCreate(Bundle state){super.onCreate(state);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);settings=getSharedPreferences("settings",0);pendingExport=state==null?null:state.getString("pendingExport");queuedVoice=state==null?null:state.getString("queuedVoice");queuedChat=state==null?null:state.getString("queuedChat");models=new Models(this);if(Agent.store==null){Agent.store=new Store(this);Agent.memory=new CubeMemory(Agent.store);}chat=state==null?settings.getString("chat",null):state.getString("chat");if(chat==null||Agent.store.rows("SELECT id FROM chats WHERE id=?",chat).isEmpty())chat=Agent.store.newChat();tts=new TextToSpeech(this,result->{ttsReady=result==TextToSpeech.SUCCESS;});render();if(state!=null)composer.setText(state.getString("draft",""));if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},5);}
+ public void onCreate(Bundle state){super.onCreate(state);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);settings=getSharedPreferences("settings",0);pendingExport=state==null?null:state.getString("pendingExport");queuedVoice=state==null?null:state.getString("queuedVoice");queuedChat=state==null?null:state.getString("queuedChat");models=new Models(this);if(Agent.store==null){Agent.store=new Store(this);Agent.memory=new CubeMemory(Agent.store);}chat=state==null?settings.getString("chat",null):state.getString("chat");if(chat==null||Agent.store.rows("SELECT id FROM chats WHERE id=?",chat).isEmpty())chat=Agent.store.newChat();tts=new TextToSpeech(this,result->handler.post(()->{
+  if(!isDestroyed()&&result==TextToSpeech.SUCCESS){
+   tts.setSpeechRate(1.10f);
+   ttsReady=true;
+  }
+ }));render();if(state!=null)composer.setText(state.getString("draft",""));if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},5);}
  public void onResume(){super.onResume();resumed=true;Agent.listener=this;render();if(!dispatchVoice())restoreModel();handler.post(poll);handler.post(statusTick);}
  public void onPause(){super.onPause();resumed=false;handler.removeCallbacks(poll);handler.removeCallbacks(statusTick);settings.edit().putString("chat",chat).apply();}
  public void onSaveInstanceState(Bundle state){state.putString("chat",chat);state.putString("pendingExport",pendingExport);state.putString("queuedVoice",queuedVoice);state.putString("queuedChat",queuedChat);state.putString("draft",composer==null?chatDraft:composer.getText().toString());super.onSaveInstanceState(state);}
@@ -298,7 +303,7 @@ public final class MainActivity extends Activity implements Agent.Listener {
    if(!messages.get(i)[1].equals("assistant"))continue;
    if(!ttsReady){error(new IllegalStateException("Choose or install an Android text-to-speech voice in system settings."));return;}
    silence();
-   new SentenceStream().append(messages.get(i)[2],true,this::enqueueSpeech);
+   enqueueSpeech(messages.get(i)[2]);
    return;
   }
  }
