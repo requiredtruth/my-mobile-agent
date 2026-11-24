@@ -118,7 +118,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_mobileagent_NativeModel_preparePrefix
  try{
   auto vocab=llama_model_get_vocab(model);
   auto render=[&](const char* probe){
-   common_json messages={{{"role","system"},{"content",instruction}},{{"role","user"},{"content",probe}}};
+   auto messages=common_json::array();
+   messages.push_back(common_json{{"role","system"},{"content",instruction}});
+   messages.push_back(common_json{{"role","user"},{"content",std::string(probe)}});
    auto input=chat_inputs(messages.dump(),tool_defs,thinking);
    common_chat_session session(templates.get(),vocab,input);
    return tokenize(vocab,session.prompt().str(),true);
