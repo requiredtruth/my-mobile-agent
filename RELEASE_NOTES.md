@@ -2,3 +2,4 @@
 - Auto-send voice and Speak thinking appear side by side.
 - Settings shows whether the instruction KV cache is ready. The cache is stored in persistent private app storage and restored when reopening the app.
 - Replies stream inside the Assistant card. Chat follows new lines without refocusing the scroll view on every token.
+- Automatic speech waits for two ready sentences before starting. A one-sentence response plays when it finishes.

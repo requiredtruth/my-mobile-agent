@@ -31,11 +31,20 @@ public class IntegrationTest {
   speech.append("First sentence",false,queued::add);
   assertTrue(queued.isEmpty());
   speech.append("First sentence. Second",false,queued::add);
-  assertEquals(Collections.singletonList("First sentence."),queued);
+  assertTrue(queued.isEmpty());
   speech.append("First sentence. Second sentence. Final",false,queued::add);
+  assertEquals(Arrays.asList("First sentence.","Second sentence."),queued);
   speech.append("First sentence. Second sentence. Final",true,queued::add);
   speech.append("First sentence. Second sentence. Final",true,queued::add);
   assertEquals(Arrays.asList("First sentence.","Second sentence.","Final"),queued);
+
+  SentenceStream oneSentence=new SentenceStream();
+  List<String> single=new ArrayList<>();
+  oneSentence.append("Only one sentence.",false,single::add);
+  assertTrue(single.isEmpty());
+  oneSentence.append("Only one sentence.",true,single::add);
+  oneSentence.append("Only one sentence.",true,single::add);
+  assertEquals(Collections.singletonList("Only one sentence."),single);
  }
  @Test public void realGgufNativeInference()throws Exception{
   File model=new File(context.getFilesDir(),"smoke.gguf");try(InputStream in=InstrumentationRegistry.getInstrumentation().getContext().getAssets().open("smoke.gguf");OutputStream out=new FileOutputStream(model)){byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);}

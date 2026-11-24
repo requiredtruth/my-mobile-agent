@@ -6,19 +6,39 @@ import java.util.function.Consumer;
 
 /** Advances through cumulative reply snapshots in speech queue order. */
 final class SentenceStream {
- private String queuedPrefix="";
+ private String processedPrefix="";
+ private String firstSentence;
+ private boolean started;
 
  void append(String text,boolean finished,Consumer<String> enqueue){
-  if(!text.startsWith(queuedPrefix))return;
+  if(!text.startsWith(processedPrefix))return;
   BreakIterator sentences=BreakIterator.getSentenceInstance(Locale.getDefault());
   sentences.setText(text);
-  int start=queuedPrefix.length();
+  int start=processedPrefix.length();
   for(int end=sentences.following(start);end!=BreakIterator.DONE;end=sentences.next()){
    String sentence=text.substring(start,end).trim();
    if(!finished&&end==text.length())break;
-   if(!sentence.isEmpty())enqueue.accept(sentence);
+   if(!sentence.isEmpty())accept(sentence,enqueue);
    start=end;
-   queuedPrefix=text.substring(0,end).trim();
+   processedPrefix=text.substring(0,end).trim();
   }
+  if(finished&&firstSentence!=null){
+   enqueue.accept(firstSentence);
+   firstSentence=null;
+   started=true;
+  }
+ }
+
+ private void accept(String sentence,Consumer<String> enqueue){
+  if(!started){
+   if(firstSentence==null){
+    firstSentence=sentence;
+    return;
+   }
+   enqueue.accept(firstSentence);
+   firstSentence=null;
+   started=true;
+  }
+  enqueue.accept(sentence);
  }
 }
