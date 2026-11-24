@@ -33,10 +33,10 @@ public class IntegrationTest {
   speech.append("First sentence. Second",false,queued::add);
   assertTrue(queued.isEmpty());
   speech.append("First sentence. Second sentence. Final",false,queued::add);
-  assertEquals(Arrays.asList("First sentence.","Second sentence."),queued);
+  assertEquals(Collections.singletonList("First sentence. Second sentence."),queued);
   speech.append("First sentence. Second sentence. Final",true,queued::add);
   speech.append("First sentence. Second sentence. Final",true,queued::add);
-  assertEquals(Arrays.asList("First sentence.","Second sentence.","Final"),queued);
+  assertEquals(Arrays.asList("First sentence. Second sentence.","Final"),queued);
 
   SentenceStream oneSentence=new SentenceStream();
   List<String> single=new ArrayList<>();
@@ -129,6 +129,26 @@ public class IntegrationTest {
    byte[] bytes=output.toString().getBytes(StandardCharsets.UTF_8);callback.token(bytes);return bytes;
   }catch(JSONException e){throw new AssertionError(e);}};
   Agent.run(chat,"Find lighthouse in past notes");assertEquals(2,runs[0]);List<String[]> rows=db.messages(chat);assertTrue(rows.stream().anyMatch(m->m[1].equals("reasoning")));assertEquals("No past notes matched.",rows.get(rows.size()-1)[2]);assertEquals(2,rows.stream().filter(m->m[1].equals("tool")).count());
+ }
+ @Test public void visibleReplySurvivesAnIncompleteToolMarker(){
+  String chat=db.newChat();db.message(chat,"user","Who are you?");Agent.loaded="test";
+  String visible="I am a local assistant. I can answer questions. I run on your device.";
+  List<String> drafts=new ArrayList<>(), spoken=new ArrayList<>();
+  Agent.listener=new Agent.Listener(){
+   @Override public void update(String id,String live){drafts.add(live);}
+   @Override public void speech(String id,long round,String text,boolean finished){spoken.add(text);}
+  };
+  int[] runs={0};
+  Agent.generator=(messages,tools,answer,thinking,required,callback)->{
+   runs[0]++;
+   callback.token(new JSONObject(Collections.singletonMap("content",visible)).toString().getBytes(StandardCharsets.UTF_8));
+   return new JSONObject(Collections.singletonMap("content",visible+"<tool_call>")).toString().getBytes(StandardCharsets.UTF_8);
+  };
+  Agent.run(chat,"Who are you?");
+  assertEquals(1,runs[0]);
+  assertTrue(drafts.contains(visible));
+  assertEquals(Arrays.asList(visible,visible),spoken);
+  assertEquals(visible,db.messages(chat).get(1)[2]);
  }
  @Test public void truncatedToolIsNeverExecuted()throws Exception{
   String chat=db.newChat();db.message(chat,"user","What is fire?");Agent.loaded="test";int[] runs={0};
